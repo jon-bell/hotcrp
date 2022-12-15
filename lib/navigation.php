@@ -68,7 +68,8 @@ class NavigationState {
         }
         $this->protocol = $x;
         $x .= $this->host ? : "localhost";
-        if (($port = $server["SERVER_PORT"])
+        if (!isset($server["HTTP_X_FORWARDED_PROTO"])
+            && ($port = $server["SERVER_PORT"])
             && $port != $xport
             && strpos($x, ":", 6) === false) {
             $x .= ":" . $port;
