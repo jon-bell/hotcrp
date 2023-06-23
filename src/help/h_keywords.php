@@ -1,16 +1,35 @@
 <?php
 // help/h_keywords.php -- HotCRP help functions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Keywords_HelpTopic {
+    /** @param list<SearchExample> $exs */
+    static function print_search_examples(HelpRenderer $hth, $exs) {
+        while (($ex = array_shift($exs))) {
+            $desc = Ftext::unparse_as($hth->conf->_($ex->description, ...$ex->all_arguments()), 5);
+            $qs = [];
+            foreach (SearchExample::remove_category($exs, $ex) as $oex) {
+                if (!$oex->primary_only)
+                    $qs[] = preg_replace('/\{(\w+)\}/', '<i>$1</i>', htmlspecialchars($oex->q));
+            }
+            foreach ($ex->hints ?? [] as $h) {
+                $desc .= '<div class="hint">' . Ftext::unparse_as($hth->conf->_($h, ...$ex->all_arguments()), 5) . '</div>';
+            }
+            if ($qs) {
+                $desc .= '<div class="hint">Also ' . join(", ", $qs) . '</div>';
+            }
+            echo $hth->search_trow($ex->expanded_query(), $desc);
+        }
+    }
+
     static function print(HelpRenderer $hth) {
         // how to report author searches?
         if ($hth->conf->submission_blindness() === Conf::BLIND_NEVER) {
             $aunote = "";
         } else if ($hth->conf->submission_blindness() === Conf::BLIND_ALWAYS) {
-            $aunote = "<br><span class=\"hint\">Search uses fields visible to the searcher. For example, PC member searches do not examine authors.</span>";
+            $aunote = "<br><div class=\"hint\">Search uses fields visible to the searcher. For example, PC member searches do not examine authors.</div>";
         } else {
-            $aunote = "<br><span class=\"hint\">Search uses fields visible to the searcher. For example, PC member searches do not examine anonymous authors.</span>";
+            $aunote = "<br><div class=\"hint\">Search uses fields visible to the searcher. For example, PC member searches do not examine anonymous authors.</div>";
         }
 
         // does a reviewer tag exist?
@@ -49,7 +68,7 @@ class Keywords_HelpTopic {
         echo $hth->search_trow("topic:link", "selected topics match “link”");
 
         $opts = array_filter($hth->conf->options()->normal(), function ($o) {
-            return $o->form_order() !== false && $o->search_keyword() !== false;
+            return $o->on_form() && $o->search_keyword() !== false;
         });
         usort($opts, function ($a, $b) {
             if ($a->final !== $b->final) {
@@ -58,41 +77,16 @@ class Keywords_HelpTopic {
                 return PaperOption::compare($a, $b);
             }
         });
-        $oexs = [];
+        $exs = [];
         foreach ($opts as $o) {
-            foreach ($o->search_examples($hth->user, PaperOption::EXAMPLE_HELP) as $ex) {
-                if ($ex) {
-                    $ex->opt = $o;
-                    $oexs[] = $ex;
-                }
+            foreach ($o->search_examples($hth->user, SearchExample::HELP) as $ex) {
+                $exs[] = $ex;
             }
         }
 
-        if (!empty($oexs)) {
+        if (!empty($exs)) {
             echo $hth->tgroup("Submission fields");
-            for ($i = 0; $i !== count($oexs); ++$i) {
-                if (($ex = $oexs[$i]) && $ex->description) {
-                    $others = [];
-                    for ($j = $i + 1; $j !== count($oexs); ++$j) {
-                        if ($oexs[$j] && $oexs[$j]->description === $ex->description) {
-                            $others[] = htmlspecialchars($oexs[$j]->q);
-                            $oexs[$j] = null;
-                        }
-                    }
-                    $q = $ex->q;
-                    if ($ex->param_q) {
-                        $q = preg_replace('/<.*?>(?=\z|"\z)/', $ex->param_q, $q);
-                    }
-                    $args = $ex->params;
-                    $args[] = new FmtArg("title", $ex->opt->title());
-                    $args[] = new FmtArg("id", $ex->opt->readable_formid());
-                    $desc = Ftext::unparse_as($hth->conf->_($ex->description, ...$args), 5);
-                    if (!empty($others)) {
-                        $desc .= '<div class="hint">Also ' . join(", ", $others) . '</div>';
-                    }
-                    echo $hth->search_trow($q, $desc);
-                }
-            }
+            self::print_search_examples($hth, $exs);
         }
 
         echo $hth->tgroup($hth->help_link("Tags", "tags"));
@@ -131,7 +125,7 @@ class Keywords_HelpTopic {
         if ($retag) {
             echo $hth->search_trow("re:#$retag>1", "at least two reviewers (assigned and/or completed) tagged “#" . $retag . "”");
         }
-        echo $hth->search_trow("re:complete<3", "less than three completed reviews<br /><span class=\"hint\">Use “cre:<3” for short.</span>");
+        echo $hth->search_trow("re:complete<3", "less than three completed reviews<br><div class=\"hint\">Use “cre:<3” for short.</div>");
         echo $hth->search_trow("re:incomplete>0", "at least one incomplete review");
         echo $hth->search_trow("re:inprogress", "at least one in-progress review (started, but not completed)");
         echo $hth->search_trow("re:primary>=2", "at least two primary reviewers");
@@ -153,6 +147,18 @@ class Keywords_HelpTopic {
         if ($hth->conf->setting("rev_ratings") != REV_RATINGS_NONE) {
             echo $hth->search_trow("rate:good", "has a positively-rated review (“rate:bad”, “rate:biased”, etc. also work)");
             echo $hth->search_trow("rate:good:me", "has a positively-rated review by you");
+        }
+
+        // review fields
+        $exs = [];
+        foreach ($hth->conf->review_form()->viewable_fields($hth->user) as $rf) {
+            foreach ($rf->search_examples($hth->user, SearchExample::HELP) as $ex) {
+                $exs[] = $ex;
+            }
+        }
+        if (!empty($exs)) {
+            echo $hth->tgroup("Review fields");
+            self::print_search_examples($hth, $exs);
         }
 
         echo $hth->tgroup("Comments");
@@ -177,14 +183,14 @@ class Keywords_HelpTopic {
         echo $hth->search_trow("shep:fdabek", "“fdabek” (in name/email) is shepherd (“none” and “any” also work)");
         echo $hth->tgroup("Conflicts");
         echo $hth->search_trow("conflict:me", "you have a conflict with the submission");
-        echo $hth->search_trow("conflict:fdabek", "“fdabek” (in name/email) has a conflict with the submission<br /><span class=\"hint\">This search is only available to chairs and to PC members who can see the submission’s author list.</span>");
+        echo $hth->search_trow("conflict:fdabek", "“fdabek” (in name/email) has a conflict with the submission<br><div class=\"hint\">This search is only available to chairs and to PC members who can see the submission’s author list.</div>");
         echo $hth->search_trow("conflict:pc", "some PC member has a conflict with the submission");
         echo $hth->search_trow("conflict:pc>2", "at least three PC members have conflicts with the submission");
         echo $hth->search_trow("reconflict:\"1 2 3\"", "a reviewer of submission 1, 2, or 3 has a conflict with the submission");
         echo $hth->tgroup("Preferences");
         echo $hth->search_trow("pref:3", "you have preference 3");
         echo $hth->search_trow("pref:pc:X", "a PC member’s preference has expertise “X” (expert)");
-        echo $hth->search_trow("pref:fdabek>0", "“fdabek” (in name/email) has preference &gt;&nbsp;0<br /><span class=\"hint\">Administrators can search preferences by name; PC members can only search preferences for the PC as a whole.</span>");
+        echo $hth->search_trow("pref:fdabek>0", "“fdabek” (in name/email) has preference &gt;&nbsp;0<br><div class=\"hint\">Administrators can search preferences by name; PC members can only search preferences for the PC as a whole.</div>");
         echo $hth->tgroup("Status");
         echo $hth->search_trow(["q" => "status:ready", "t" => "all"], "submission is ready for review");
         echo $hth->search_trow(["q" => "status:incomplete", "t" => "all"], "submission is incomplete (neither ready nor withdrawn)");
@@ -198,7 +204,7 @@ class Keywords_HelpTopic {
                 if (strpos($qdname, " ") !== false) {
                     $qdname = "\"{$qdname}\"";
                 }
-                echo $hth->search_trow("dec:{$qdname}", "decision is “" . htmlspecialchars($dec->name) . "” (partial matches OK)");
+                echo $hth->search_trow("dec:{$qdname}", "decision is “" . $dec->name_as(5) . "” (partial matches OK)");
                 break;
             }
         }
@@ -209,70 +215,18 @@ class Keywords_HelpTopic {
 
         // find names of review fields to demonstrate syntax
         $scoref = [];
-        $textf = [];
         foreach ($hth->conf->review_form()->viewable_fields($hth->user) as $f) {
             if ($f instanceof Score_ReviewField) {
                 $scoref[] = $f;
-            } else if ($f instanceof Text_ReviewField) {
-                $textf[] = $f;
             }
-        }
-        if (!empty($scoref) || !empty($textf)) {
-            echo $hth->tgroup("Review fields");
-        }
-        if (count($scoref)) {
-            $r = $scoref[0];
-            echo $hth->search_trow("{$r->abbreviation1()}:{$r->typical_score()}", "at least one completed review has $r->name_html score {$r->typical_score()}");
-            echo $hth->search_trow("{$r->search_keyword()}:{$r->typical_score()}", "other abbreviations accepted");
-            if (count($scoref) > 1) {
-                $r2 = $scoref[1];
-                echo $hth->search_trow(strtolower($r2->search_keyword()) . ":{$r2->typical_score()}", "other fields accepted (here, $r2->name_html)");
-            }
-            if (($range = $r->typical_score_range())) {
-                echo $hth->search_trow("{$r->search_keyword()}:{$range[0]}..{$range[1]}", "completed reviews’ $r->name_html scores are in the {$range[0]}&ndash;{$range[1]} range<br /><small>(all scores between {$range[0]} and {$range[1]})</small>");
-                $rt = $range[0] . ($r->option_letter ? "" : "-") . $range[1];
-                echo $hth->search_trow("{$r->search_keyword()}:$rt", "completed reviews’ $r->name_html scores <em>fill</em> the {$range[0]}&ndash;{$range[1]} range<br /><small>(all scores between {$range[0]} and {$range[1]}, with at least one {$range[0]} and at least one {$range[1]})</small>");
-            }
-            $hint = "";
-            if (!$r->option_letter) {
-                $gt_typical = "greater than {$r->typical_score()}";
-                $le_typical = "less than or equal to {$r->typical_score()}";
-            } else {
-                $s1 = $r->parse_string($r->typical_score());
-                if ($hth->conf->opt("smartScoreCompare")) {
-                    $s1le = range($s1, 1);
-                    $s1gt = range($r->nvalues(), $s1 + 1);
-                    $hint = "<br><small>(scores “better than” {$r->typical_score()} are earlier in the alphabet)</small>";
-                } else {
-                    $s1le = range($r->nvalues(), $s1);
-                    $s1gt = range($s1 - 1, 1);
-                }
-                $gt_typical = commajoin(array_map([$r, "value_unparse"], $s1gt), " or ");
-                $le_typical = commajoin(array_map([$r, "value_unparse"], $s1le), " or ");
-            }
-            echo $hth->search_trow("{$r->search_keyword()}:>{$r->typical_score()}", "at least one completed review has $r->name_html score $gt_typical" . $hint);
-            echo $hth->search_trow("{$r->search_keyword()}:2<={$r->typical_score()}", "at least two completed reviews have $r->name_html score $le_typical");
-            echo $hth->search_trow("{$r->search_keyword()}:=2<={$r->typical_score()}", "<em>exactly</em> two completed reviews have $r->name_html score $le_typical");
-            if ($roundname) {
-                echo $hth->search_trow("{$r->search_keyword()}:$roundname>{$r->typical_score()}", "at least one completed review in round " . htmlspecialchars($roundname) . " has $r->name_html score $gt_typical");
-            }
-            echo $hth->search_trow("{$r->search_keyword()}:ext>{$r->typical_score()}", "at least one completed external review has $r->name_html score $gt_typical");
-            echo $hth->search_trow("{$r->search_keyword()}:pc:2>{$r->typical_score()}", "at least two completed PC reviews have $r->name_html score $gt_typical");
-            echo $hth->search_trow("{$r->search_keyword()}:sylvia={$r->typical_score()}", "“sylvia” (reviewer name/email) gave $r->name_html score {$r->typical_score()}");
-        }
-        if (count($textf)) {
-            $r = $textf[0];
-            echo $hth->search_trow($r->abbreviation1() . ":finger", "at least one completed review has “finger” in the $r->name_html field");
-            echo $hth->search_trow("{$r->search_keyword()}:finger", "other abbreviations accepted");
-            echo $hth->search_trow("{$r->search_keyword()}:any", "at least one completed review has text in the $r->name_html field");
         }
 
         if (count($scoref)) {
             $r = $scoref[0];
             echo $hth->tgroup($hth->help_link("Formulas", "formulas"));
             echo $hth->search_trow("formula:all({$r->search_keyword()}={$r->typical_score()})",
-                "all reviews have $r->name_html score {$r->typical_score()}<br />" .
-                "<span class=\"hint\">" . $hth->help_link("Formulas", "formulas") . " can express complex numerical queries across review scores and preferences.</span>");
+                "all reviews have $r->name_html score {$r->typical_score()}<br>" .
+                "<div class=\"hint\">" . $hth->help_link("Formulas", "formulas") . " can express complex numerical queries across review scores and preferences.</div>");
             echo $hth->search_trow("f:all({$r->search_keyword()}={$r->typical_score()})", "“f” is shorthand for “formula”");
             echo $hth->search_trow("formula:var({$r->search_keyword()})>0.5", "variance in {$r->search_keyword()} is above 0.5");
             echo $hth->search_trow("formula:any({$r->search_keyword()}={$r->typical_score()} && pref<0)", "at least one reviewer had $r->name_html score {$r->typical_score()} and review preference &lt; 0");

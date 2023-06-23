@@ -1,14 +1,42 @@
 <?php
 // mailrecipients.php -- HotCRP mail tool
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+
+class MailRecipientClass {
+    /** @var string */
+    public $name;
+    /** @var ?string */
+    public $description;
+    /** @var int */
+    public $flags;
+    /** @var string */
+    public $default_message;
+
+    /** @param string $name
+     * @param ?string $description
+     * @param int $flags
+     * @param ?string $default_message */
+    function __construct($name, $description, $flags, $default_message) {
+        $this->name = $name;
+        $this->description = $description;
+        $this->flags = $flags;
+        $this->default_message = $default_message;
+    }
+}
 
 class MailRecipients extends MessageSet {
-    /** @var Conf */
-    private $conf;
-    /** @var Contact */
-    private $user;
-    /** @var string */
-    private $type;
+    /** @var Conf
+     * @readonly */
+    public $conf;
+    /** @var Contact
+     * @readonly */
+    public $user;
+    /** @var ?string */
+    private $recipt_default_message;
+    /** @var list<MailRecipientClass> */
+    private $recipts = [];
+    /** @var MailRecipientClass */
+    private $rect;
     /** @var ?list<int> */
     private $paper_ids;
     /** @var int */
@@ -17,10 +45,10 @@ class MailRecipients extends MessageSet {
     private $_dcounts;
     /** @var ?array{bool,bool,bool} */
     private $_has_dt;
-    /** @var array<string,string> */
-    private $sel = [];
-    /** @var array<string,int> */
-    private $selflags = [];
+    /** @var bool */
+    private $_has_paper_set = false;
+    /** @var ?PaperInfoSet */
+    private $_paper_set;
 
     const F_ANYPC = 1;
     const F_GROUP = 2;
@@ -28,56 +56,14 @@ class MailRecipients extends MessageSet {
     const F_NOPAPERS = 8;
     const F_SINCE = 16;
 
-    private function defsel($name, $description, $flags = 0) {
-        assert(!isset($this->sel[$name]));
-        $this->sel[$name] = $description;
-        $this->selflags[$name] = $flags;
-    }
-
     /** @param Contact $user */
     function __construct($user) {
         assert(!!$user->isPC);
         $this->conf = $user->conf;
         $this->user = $user;
         $this->set_ignore_duplicates(true);
-    }
-
-    /** @return bool */
-    function has_paper_ids() {
-        return $this->paper_ids !== null;
-    }
-
-    /** @return list<int> */
-    function paper_ids() {
-        return $this->paper_ids ?? [];
-    }
-
-    /** @param ?list<int> $paper_ids
-     * @return $this */
-    function set_paper_ids($paper_ids) {
-        $this->paper_ids = $paper_ids;
-        return $this;
-    }
-
-    /** @param ?string $newrev_since
-     * @return $this */
-    function set_newrev_since($newrev_since) {
-        $newrev_since = trim($newrev_since ?? "");
-        if ($newrev_since !== ""
-            && !preg_match('/\A(?:|n\/a|\(?all\)?|0)\z/i', $newrev_since)) {
-            $t = $this->conf->parse_time($newrev_since);
-            if ($t === false) {
-                $this->error_at("newrev_since", "Invalid date.");
-            } else {
-                $this->newrev_since = $t;
-                if ($t > Conf::$now) {
-                    $this->warning_at("newrev_since", "That time is in the future.");
-                }
-            }
-        } else {
-            $this->newrev_since = null;
-        }
-        return $this;
+        $this->enumerate_recipients();
+        $this->rect = $this->recipts[0];
     }
 
     private function dcounts() {
@@ -111,7 +97,7 @@ class MailRecipients extends MessageSet {
             $dmaxcount = 0;
             $dmaxname = "";
             foreach ($this->conf->decision_set() as $dinfo) {
-                if ($dinfo->category === $category
+                if (($dinfo->catbits & $category) !== 0
                     && ($dcount = $this->_dcounts[$dinfo->id] ?? 0) > $dmaxcount) {
                     $dmaxcount = $dcount;
                     $dmaxname = $dinfo->name;
@@ -129,14 +115,34 @@ class MailRecipients extends MessageSet {
         }
     }
 
-    /** @param ?string $type
-     * @return $this */
-    function set_recipients($type) {
+    /** @return list<string> */
+    function default_messages() {
+        $dm = [];
+        foreach ($this->recipts as $rec) {
+            if ($rec->default_message && !in_array($rec->default_message, $dm))
+                $dm[] = $rec->default_message;
+        }
+        return $dm;
+    }
+
+    /** @return string */
+    function current_default_message() {
+        return $this->rect->default_message;
+    }
+
+    /** @param string $name
+     * @param string $description
+     * @param int $flags */
+    private function defsel($name, $description, $flags = 0) {
+        $this->recipts[] = new MailRecipientClass($name, $description, $flags, $this->recipt_default_message);
+    }
+
+    private function enumerate_recipients() {
         $user = $this->user;
-        $this->type = $this->canonical_recipients($type);
         assert(!!$user->isPC);
 
         if ($user->is_manager()) {
+            $this->recipt_default_message = "authors";
             $hide = !$this->conf->has_any_submitted();
             $this->defsel("s", "Contact authors of submitted papers", $hide ? self::F_HIDE : 0);
             $this->defsel("unsub", "Contact authors of unsubmitted papers");
@@ -147,7 +153,7 @@ class MailRecipients extends MessageSet {
             foreach ($this->conf->decision_set() as $dec) {
                 if ($dec->id !== 0) {
                     $hide = ($this->_dcounts[$dec->id] ?? 0) === 0;
-                    $this->defsel("dec:{$dec->name}", "Contact authors of " . htmlspecialchars($dec->name) . " papers", $hide ? self::F_HIDE : 0);
+                    $this->defsel("dec:{$dec->name}", "Contact authors of " . $dec->name_as(5) . " papers", $hide ? self::F_HIDE : 0);
                 }
             }
             $this->defsel("dec:yes", "Contact authors of accept-class papers", $this->_has_dt[2] ? 0 : self::F_HIDE);
@@ -156,6 +162,7 @@ class MailRecipients extends MessageSet {
             $this->defsel("dec:any", "Contact authors of decided papers", self::F_HIDE);
             $this->defsel("bydec_group_end", null, self::F_GROUP);
 
+            $this->recipt_default_message = "reviewers";
             $this->defsel("rev_group", "Reviewers", self::F_GROUP);
 
             // XXX this exposes information about PC review assignments
@@ -193,11 +200,13 @@ class MailRecipients extends MessageSet {
             $hide = $any_extrev ? 0 : self::F_HIDE;
             $this->defsel("extrev", "External reviewers", $hide);
             $this->defsel("uncextrev", "External reviewers with incomplete reviews", $hide);
+            $this->defsel("extrev-not-accepted", "External reviewers with outstanding requests", $hide);
             $this->defsel("rev_group_end", null, self::F_GROUP);
         } else {
             $any_lead = $any_shepherd = 0;
         }
 
+        $this->recipt_default_message = "reviewers";
         $hide = !$this->user->is_requester();
         $this->defsel("myextrev", "Your requested reviewers", self::F_ANYPC | ($hide ? self::F_HIDE : 0));
         $this->defsel("uncmyextrev", "Your requested reviewers with incomplete reviews", self::F_ANYPC | ($hide ? self::F_HIDE : 0));
@@ -207,99 +216,153 @@ class MailRecipients extends MessageSet {
             $this->defsel("shepherd", "Shepherds", $any_shepherd ? 0 : self::F_HIDE);
         }
 
-        $this->defsel("pc_group", "Program committee", self::F_GROUP);
-        $selcount = count($this->sel);
-        $this->defsel("pc", "Program committee", self::F_ANYPC | self::F_NOPAPERS);
+        // PC
+        $this->recipt_default_message = "pc";
+        $tags = [];
         foreach ($this->conf->viewable_user_tags($this->user) as $t) {
             if ($t !== "pc")
-                $this->defsel("pc:$t", "#$t program committee", self::F_ANYPC | self::F_NOPAPERS);
+                $tags[] = $t;
         }
-        if (count($this->sel) == $selcount + 1) {
-            unset($this->sel["pc_group"]);
+        if (empty($tags)) {
+            $this->defsel("pc", "Program committee", self::F_ANYPC | self::F_NOPAPERS);
         } else {
+            $this->defsel("pc_group", "Program committee", self::F_GROUP);
+            $this->defsel("pc", "Program committee", self::F_ANYPC | self::F_NOPAPERS);
+            foreach ($tags as $t) {
+                $this->defsel("pc:{$t}", "#{$t} program committee", self::F_ANYPC | self::F_NOPAPERS);
+            }
             $this->defsel("pc_group_end", null, self::F_GROUP);
         }
 
         if ($user->privChair) {
+            $this->recipt_default_message = null;
             $this->defsel("all", "Active users", self::F_NOPAPERS);
         }
-
-        if (isset($this->sel[$type])
-            && !($this->selflags[$type] & self::F_GROUP)) {
-            $this->type = $type;
-        } else {
-            $this->type = key($this->sel);
-            if ($type !== null && $type !== "") {
-                $this->error_at("to", "Invalid recipients.");
-            }
-        }
-
-        return $this;
     }
 
-    function selectors() {
-        $sel = [];
-        $last = null;
-        foreach ($this->sel as $n => $d) {
-            $flags = $this->selflags[$n];
-            if ($flags & self::F_GROUP) {
-                if ($d !== null) {
-                    $sel[$n] = ["optgroup", $d];
-                } else if ($last !== null
-                           && ($this->selflags[$last] & self::F_GROUP)) {
-                    unset($sel[$last]);
-                } else {
-                    $sel[$n] = ["optgroup"];
-                }
-            } else if (!($flags & self::F_HIDE) || $n == $this->type) {
-                if (is_string($d)) {
-                    $d = ["label" => $d];
-                }
-                $k = [];
-                if ($flags & self::F_NOPAPERS) {
-                    $k[] = "mail-want-no-papers";
-                }
-                if ($flags & self::F_SINCE) {
-                    $k[] = "mail-want-since";
-                }
-                if (!empty($k)) {
-                    $d["class"] = join(" ", $k);
-                }
-                $sel[$n] = $d;
-            } else {
-                continue;
-            }
-            $last = $n;
+    /** @param string $type
+     * @return ?string */
+    function recipient_description($type) {
+        foreach ($this->recipts as $rec) {
+            if ($rec->name === $type)
+                return $rec->description;
         }
-        return Ht::select("to", $sel, $this->type, ["id" => "to", "class" => "uich js-mail-recipients"]);
+        return null;
     }
 
     /** @return string */
-    function unparse() {
-        $t = $this->sel[$this->type];
-        if ($this->type == "newpcrev" && $this->newrev_since) {
-            $t .= " since " . htmlspecialchars($this->conf->parseableTime($this->newrev_since, false));
+    function current_fold_classes(Qrequest $qreq) {
+        return "fold8" . (!!$qreq->plimit ? "o" : "c")
+            . " fold9" . ($this->rect->flags & self::F_NOPAPERS ? "c" : "o")
+            . " fold10" . ($this->rect->flags & self::F_SINCE ? "o" : "c");
+    }
+
+    /** @param ?list<int> $paper_ids
+     * @return $this */
+    function set_paper_ids($paper_ids) {
+        $this->paper_ids = $paper_ids;
+        return $this;
+    }
+
+    /** @param ?string $newrev_since
+     * @return $this */
+    function set_newrev_since($newrev_since) {
+        $newrev_since = trim($newrev_since ?? "");
+        if ($newrev_since !== ""
+            && !preg_match('/\A(?:|n\/a|\(?all\)?|0)\z/i', $newrev_since)) {
+            $t = $this->conf->parse_time($newrev_since);
+            if ($t === false) {
+                $this->error_at("newrev_since", "Invalid date.");
+            } else {
+                $this->newrev_since = $t;
+                if ($t > Conf::$now) {
+                    $this->warning_at("newrev_since", "That time is in the future.");
+                }
+            }
+        } else {
+            $this->newrev_since = null;
         }
-        return $t;
+        return $this;
+    }
+
+    /** @param ?string $type
+     * @return $this */
+    function set_recipients($type) {
+        $this->_has_paper_set = false;
+        $type = $this->canonical_recipients($type);
+        foreach ($this->recipts as $i => $rec) {
+            if ($rec->name === $type && ($rec->flags & self::F_GROUP) === 0) {
+                $this->rect = $rec;
+                return $this;
+            }
+        }
+        $this->rect = $this->recipts[0];
+        if (($type ?? "") !== "") {
+            $this->error_at("to", "Invalid recipients");
+        }
+        return $this;
+    }
+
+    /** @return bool */
+    function has_paper_ids() {
+        return $this->paper_ids !== null;
+    }
+
+    /** @return list<int> */
+    function paper_ids() {
+        return $this->paper_ids ?? [];
+    }
+
+    /** @param string $id
+     * @return string */
+    function recipient_selector_html($id) {
+        $sel = [];
+        $last = null;
+        $lastflags = 0;
+        foreach ($this->recipts as $rec) {
+            if (($rec->flags & self::F_GROUP) !== 0) {
+                if ($rec->description !== null) {
+                    $sel[$rec->name] = ["optgroup", $rec->description];
+                } else if (($lastflags & self::F_GROUP) !== 0) {
+                    unset($sel[$last]);
+                } else {
+                    $sel[$rec->name] = ["optgroup"];
+                }
+            } else {
+                if (($rec->flags & self::F_HIDE) !== 0
+                    && $rec !== $this->rect) {
+                    continue;
+                }
+                $d = [];
+                if (isset($rec->description)) {
+                    $d["label"] = $rec->description;
+                }
+                $d["class"] = Ht::add_tokens($rec->flags & self::F_NOPAPERS ? "mail-want-no-papers" : "",
+                    $rec->flags & self::F_SINCE ? "mail-want-since" : "");
+                $d["data-default-message"] = $rec->default_message;
+                $sel[$rec->name] = $d;
+            }
+            $last = $rec->name;
+            $lastflags = $rec->flags;
+        }
+        return Ht::select($id, $sel, $this->rect->name, ["id" => $id, "class" => "uich js-mail-recipients"]);
     }
 
     /** @return bool */
     function is_authors() {
-        return in_array($this->type, ["s", "unsub", "au"])
-            || str_starts_with($this->type, "dec:");
+        return in_array($this->rect->name, ["s", "unsub", "au"])
+            || str_starts_with($this->rect->name, "dec:");
     }
 
     /** @return bool */
     function need_papers() {
-        return $this->type !== "pc"
-            && substr($this->type, 0, 3) !== "pc:"
-            && $this->type !== "all";
+        return ($this->rect->flags & self::F_NOPAPERS) === 0;
     }
 
     /** @param bool $paper_sensitive
      * @return int */
     function combination_type($paper_sensitive) {
-        if (preg_match('/\A(?:pc|pc:.*|(?:|unc|new)pcrev|lead|shepherd)\z/', $this->type)) {
+        if (preg_match('/\A(?:pc|pc:.*|(?:|unc|new)pcrev|lead|shepherd)\z/', $this->rect->name)) {
             return 2;
         } else if ($this->is_authors() || $paper_sensitive) {
             return 1;
@@ -308,43 +371,61 @@ class MailRecipients extends MessageSet {
         }
     }
 
+    /** @return string */
+    function unparse() {
+        $t = $this->rect->description;
+        if ($this->rect->name == "newpcrev" && $this->newrev_since) {
+            $t .= " since " . htmlspecialchars($this->conf->parseableTime($this->newrev_since, false));
+        }
+        return $t;
+    }
+
     /** @return ?PaperInfoSet */
     function paper_set() {
+        if ($this->_has_paper_set) {
+            return $this->_paper_set;
+        }
+
+        $this->_has_paper_set = true;
+        if (!$this->need_papers()) {
+            $this->_paper_set = null;
+            return null;
+        }
+
         $options = ["allConflictType" => true];
 
         // basic limit
-        if ($this->type === "au") {
+        $t = $this->rect->name;
+        if ($t === "au") {
             // all authors, no paper restriction
-        } else if ($this->type === "s") {
+        } else if ($t === "s") {
             $options["finalized"] = true;
-        } else if ($this->type === "unsub") {
+        } else if ($t === "unsub") {
             $options["unsub"] = $options["active"] = true;
-        } else if (in_array($this->type, ["dec:any", "dec:none", "dec:yes", "dec:no", "dec:maybe"])) {
-            $options["finalized"] = $options[$this->type] = true;
-        } else if (substr($this->type, 0, 4) === "dec:") {
+        } else if (in_array($t, ["dec:any", "dec:none", "dec:yes", "dec:no", "dec:maybe"])) {
+            $options["finalized"] = $options[$t] = true;
+        } else if (substr($t, 0, 4) === "dec:") {
             $options["finalized"] = true;
             $options["where"] = "false";
             foreach ($this->conf->decision_set() as $dec) {
-                if (strcasecmp($dec->name, substr($this->type, 4)) === 0) {
+                if (strcasecmp($dec->name, substr($t, 4)) === 0) {
                     $options["where"] = "Paper.outcome={$dec->id}";
                     break;
                 }
             }
-        } else if ($this->type === "lead") {
+        } else if ($t === "lead") {
             $options["anyLead"] = $options["reviewSignatures"] = true;
-        } else if ($this->type === "shepherd") {
+        } else if ($t === "shepherd") {
             $options["anyShepherd"] = $options["reviewSignatures"] = true;
-        } else if (str_ends_with($this->type, "rev")) {
-            $options["reviewSignatures"] = true;
         } else {
-            assert(!$this->need_papers());
-            return null;
+            assert(strpos($t, "rev") !== false);
+            $options["reviewSignatures"] = true;
         }
 
         // additional manager limit
         $paper_ids = $this->paper_ids;
         if (!$this->user->privChair
-            && !($this->selflags[$this->type] & self::F_ANYPC)) {
+            && ($this->rect->flags & self::F_ANYPC) === 0) {
             if ($this->conf->check_any_admin_tracks($this->user)) {
                 $ps = new PaperSearch($this->user, ["q" => "", "t" => "admin"]);
                 if ($paper_ids === null) {
@@ -361,32 +442,41 @@ class MailRecipients extends MessageSet {
         }
 
         // load paper set
-        return $this->conf->paper_set($options, $this->user);
+        $this->_paper_set = $this->conf->paper_set($options, $this->user);
+        return $this->_paper_set;
     }
 
-    /** @param ?PaperInfoSet $paper_set
-     * @param bool $paper_sensitive
+    /** @param int $pid
+     * @return ?PaperInfo */
+    function paper($pid) {
+        $paper_set = $this->paper_set();
+        return $paper_set ? $paper_set->get($pid) : null;
+    }
+
+
+    /** @param bool $paper_sensitive
      * @return string|false */
-    function query($paper_set, $paper_sensitive) {
+    function query($paper_sensitive) {
         $cols = [];
         $where = ["not disabled"];
         $joins = ["ContactInfo"];
 
         // reviewer limit
-        if (!preg_match('/\A(new|unc|c|allc|)(pc|ext|myext|)rev\z/',
-                        $this->type, $revmatch)) {
+        $t = $this->rect->name;
+        if (!preg_match('/\A(new|unc|c|allc|)(pc|ext|myext|)rev(|-not-accepted)\z/',
+                        $t, $revmatch)) {
             $revmatch = false;
         }
 
         // build query
-        if ($this->type === "all") {
+        if ($t === "all") {
             $needpaper = false;
             $where[] = "(ContactInfo.roles!=0 or lastLogin>0 or exists (select * from PaperConflict where contactId=ContactInfo.contactId) or exists (select * from PaperReview where contactId=ContactInfo.contactId and reviewType>0))";
-        } else if ($this->type === "pc" || substr($this->type, 0, 3) === "pc:") {
+        } else if ($t === "pc" || str_starts_with($t, "pc:")) {
             $needpaper = false;
             $where[] = "(ContactInfo.roles&" . Contact::ROLE_PC . ")!=0";
-            if ($this->type != "pc") {
-                $x = sqlq(Dbl::escape_like(substr($this->type, 3)));
+            if ($t != "pc") {
+                $x = sqlq(Dbl::escape_like(substr($t, 3)));
                 $where[] = "ContactInfo.contactTags like " . Dbl::utf8ci("'% {$x}#%'");
             }
         } else if ($revmatch) {
@@ -394,9 +484,9 @@ class MailRecipients extends MessageSet {
             $joins[] = "join Paper";
             $joins[] = "join PaperReview on (PaperReview.paperId=Paper.paperId and PaperReview.contactId=ContactInfo.contactId and PaperReview.reviewType>0)";
             $where[] = "Paper.paperId=PaperReview.paperId";
-        } else if ($this->type === "lead" || $this->type === "shepherd") {
+        } else if ($t === "lead" || $t === "shepherd") {
             $needpaper = true;
-            $joins[] = "join Paper on (Paper.{$this->type}ContactId=ContactInfo.contactId)";
+            $joins[] = "join Paper on (Paper.{$t}ContactId=ContactInfo.contactId)";
         } else {
             $needpaper = true;
             $joins[] = "join Paper";
@@ -404,8 +494,9 @@ class MailRecipients extends MessageSet {
             $where[] = "PaperConflict.conflictType>=" . CONFLICT_AUTHOR;
         }
 
+        $paper_set = $this->paper_set();
         assert(!!$paper_set === $needpaper);
-        if ($paper_set) {
+        if ($needpaper && $paper_set) {
             $where[] = "Paper.paperId" . sql_in_int_list($paper_set->paper_ids());
         }
 
@@ -420,7 +511,7 @@ class MailRecipients extends MessageSet {
             if ($revmatch[1] === "new") {
                 $where[] = "PaperReview.timeRequested>PaperReview.timeRequestNotified";
                 if ($this->newrev_since) {
-                    $where[] = "PaperReview.timeRequested>=$this->newrev_since";
+                    $where[] = "PaperReview.timeRequested>={$this->newrev_since}";
                 }
             }
             if ($revmatch[1] === "allc") {
@@ -440,11 +531,16 @@ class MailRecipients extends MessageSet {
             } else if ($revmatch[2] === "pc") {
                 $where[] = "PaperReview.reviewType>" . REVIEW_EXTERNAL;
             }
+            // Not accepted
+            if ($revmatch[3] === "-not-accepted") {
+                $where[] = "PaperReview.reviewModified=0";
+            }
         }
 
         // query construction
+        assert((Contact::SLICE_MINIMAL & ~Contact::SLICE_NO_PASSWORD) === 5);
         $q = "select ContactInfo.contactId, firstName, lastName, affiliation,
-            email, roles, contactTags, disabled, primaryContactId, 3 _slice,
+            email, roles, contactTags, disabled, primaryContactId, 5 _slice,
             password, preferredEmail, "
             . ($needpaper ? "Paper.paperId" : "-1") . " paperId
             from " . join("\n", $joins)

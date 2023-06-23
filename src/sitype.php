@@ -1,6 +1,6 @@
 <?php
 // sitype.php -- HotCRP conference settings types
-// Copyright (c) 2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2022-2023 Eddie Kohler; see LICENSE.
 
 abstract class Sitype {
     /** @var associative-array<string,class-string> */
@@ -556,10 +556,13 @@ class Html_Sitype extends Sitype {
 class Tag_Sitype extends Sitype {
     use Data_Sitype;
     /** @var int */
-    private $flags = Tagger::NOVALUE;
+    private $flags = Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE;
     function __construct($name, $subtype = null) {
-        if ($subtype === "allow_reserved") {
+        if ($subtype === "allow_reserved" || $subtype === "allow_reserved_chair") {
             $this->flags |= Tagger::ALLOWRESERVED;
+        }
+        if ($subtype === "allow_chair" || $subtype === "allow_reserved_chair") {
+            $this->flags &= ~Tagger::NOCHAIR;
         }
     }
     function initialize_si(Si $si) {
@@ -571,7 +574,7 @@ class Tag_Sitype extends Sitype {
         } else if (($t = $sv->tagger()->check($vstr, $this->flags))) {
             return $t;
         } else {
-            $sv->error_at($si, "<5>" . $sv->tagger()->error_html());
+            $sv->error_at($si, $sv->tagger()->error_ftext());
             return null;
         }
     }
@@ -583,21 +586,21 @@ class Tag_Sitype extends Sitype {
 class TagList_Sitype extends Sitype {
     use Data_Sitype;
     /** @var int */
-    private $flags;
+    private $flags = Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE;
     /** @var ?float */
     private $min_idx;
     /** @param string $type
      * @param string $subtype */
     function __construct($type, $subtype) {
-        if ($subtype === "wildcard") {
-            $this->flags = Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE | Tagger::ALLOWSTAR;
-        } else if ($subtype === "wildcard_chair") {
-            $this->flags = Tagger::NOPRIVATE | Tagger::NOVALUE | Tagger::ALLOWSTAR;
-        } else if ($subtype === "allotment") {
-            $this->flags = Tagger::NOPRIVATE | Tagger::NOCHAIR;
+        if ($subtype === "allow_wildcard" || $subtype === "allow_wildcard_chair") {
+            $this->flags |= Tagger::ALLOWSTAR;
+        }
+        if ($subtype === "allow_chair" || $subtype === "allow_wildcard_chair") {
+            $this->flags &= ~Tagger::NOCHAIR;
+        }
+        if ($subtype === "allotment") {
+            $this->flags &= ~Tagger::NOVALUE;
             $this->min_idx = 1.0;
-        } else {
-            $this->flags = Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE;
         }
     }
     function parse_reqv($vstr, Si $si, SettingValues $sv) {
@@ -610,7 +613,7 @@ class TagList_Sitype extends Sitype {
                 }
                 $ts[strtolower($tag)] = $tx;
             } else if ($t !== "") {
-                $sv->error_at($si, "<5>" . $sv->tagger()->error_html(true));
+                $sv->error_at($si, $sv->tagger()->error_ftext(true));
             }
         }
         ksort($ts);

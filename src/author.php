@@ -1,6 +1,6 @@
 <?php
 // author.php -- HotCRP author objects
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Author {
     /** @var string */
@@ -11,24 +11,20 @@ class Author {
     public $email = "";
     /** @var string */
     public $affiliation = "";
+    /** @var ?string */
+    private $_name;
+    /** @var ?array{string,string,string} */
+    private $_deaccents;
     /** @var ?int */
     public $contactId;
     /** @var int */
     public $roles = 0;
     /** @var int */
     public $disablement = 0;
-    /** @var ?string */
-    public $collaborators;
-    /** @var ?string */
-    private $_name;
-    /** @var ?array{string,string,string} */
-    private $_deaccents;
-    /** @var ?bool */
-    public $nonauthor;
-    /** @var ?int */
-    public $paperId;
     /** @var ?int */
     public $conflictType;
+    /** @var ?bool */
+    public $nonauthor;
     /** @var ?int */
     public $author_index;
 
@@ -92,6 +88,16 @@ class Author {
         return $au;
     }
 
+    /** @param Contact $u
+     * @return Author */
+    static function make_user($u) {
+        $au = new Author($u);
+        $au->contactId = $u->contactId;
+        $au->roles = $u->roles;
+        $au->disablement = $u->disablement;
+        return $au;
+    }
+
     /** @param Author|Contact $o */
     function merge($o) {
         if ($this->email === "") {
@@ -100,10 +106,12 @@ class Author {
         if ($this->firstName === "" && $this->lastName === "") {
             $this->firstName = $o->firstName;
             $this->lastName = $o->lastName;
+            $this->_name = null;
         }
         if ($this->affiliation === "") {
             $this->affiliation = $o->affiliation;
         }
+        $this->_deaccents = null;
     }
 
     /** @param string $s */
@@ -126,11 +134,11 @@ class Author {
                 }
             }
         }
-        $this->_name = trim($s);
         if (strlen($s) > 4
             || ($s !== "" && strcasecmp($s, "all") !== 0 && strcasecmp($s, "none") !== 0)) {
             list($this->firstName, $this->lastName, $this->email) = Text::split_name($s, true);
         }
+        $this->_name = $this->email === null ? trim($s) : null;
     }
 
     /** @param string $s */
@@ -260,7 +268,7 @@ class Author {
 
     /** @param Author|Contact $x
      * @return bool */
-    function nae_equals($x) {
+    function nea_equals($x) {
         return $this->email === $x->email
             && $this->firstName === $x->firstName
             && $this->lastName === $x->lastName
@@ -273,13 +281,13 @@ class Author {
     }
 
     /** @return array{email?:string,first?:string,last?:string,affiliation?:string} */
-    function unparse_nae_json() {
-        return self::unparse_nae_json_for($this);
+    function unparse_nea_json() {
+        return self::unparse_nea_json_for($this);
     }
 
     /** @param Author|Contact $x
      * @return array{email?:string,first?:string,last?:string,affiliation?:string} */
-    static function unparse_nae_json_for($x) {
+    static function unparse_nea_json_for($x) {
         $j = [];
         if ($x->email !== "") {
             $j["email"] = $x->email;
@@ -292,6 +300,16 @@ class Author {
         }
         if ($x->affiliation !== "") {
             $j["affiliation"] = $x->affiliation;
+        }
+        return $j;
+    }
+
+    /** @return array<string,string> */
+    function unparse_debug_json() {
+        $j = [];
+        foreach (get_object_vars($this) as $k => $v) {
+            if (!str_starts_with($k, "_") && $v !== null && $v !== "")
+                $j[$k] = $v;
         }
         return $j;
     }

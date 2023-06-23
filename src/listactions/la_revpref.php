@@ -80,7 +80,7 @@ class Revpref_ListAction extends ListAction {
                     $item["authors"] = join("\n", $aus);
                     $fields["authors"] = true;
                 }
-                $item["abstract"] = $prow->abstract_text();
+                $item["abstract"] = $prow->abstract();
                 if ($prow->topicIds !== "") {
                     $item["topics"] = $prow->unparse_topics_text();
                     $fields["topics"] = true;
@@ -103,14 +103,14 @@ class Revpref_ListAction extends ListAction {
         foreach ($ssel->selection() as $p) {
             $csvg->add_row([$p, $reviewer->email, $qreq->pref]);
         }
-        $aset = new AssignmentSet($user, true);
+        $aset = (new AssignmentSet($user))->override_conflicts();
         $aset->parse($csvg->unparse());
         $ok = $aset->execute();
         if ($qreq->ajax) {
             return $aset->json_result();
         } else if ($ok) {
             if ($aset->is_empty()) {
-                $aset->prepend_msg("<0>No changes", MessageSet::MARKED_NOTE);
+                $aset->prepend_msg("<0>No changes", MessageSet::WARNING_NOTE);
             } else {
                 $aset->prepend_msg("<0>Preference changes saved", MessageSet::SUCCESS);
             }
@@ -157,7 +157,7 @@ class Revpref_ListAction extends ListAction {
             return MessageItem::error("<0>File upload required");
         }
 
-        $aset = new AssignmentSet($user, true);
+        $aset = (new AssignmentSet($user))->override_conflicts();
         $aset->set_search_type("editpref");
         $aset->set_reviewer($reviewer);
         $aset->enable_actions("pref");
@@ -169,7 +169,7 @@ class Revpref_ListAction extends ListAction {
             if ($aset->has_error()) {
                 $aset->prepend_msg("<0>Changes not saved; please correct these errors and try again", 2);
             } else {
-                $aset->prepend_msg("<0>No changes", MessageSet::WARNING);
+                $aset->prepend_msg("<0>No changes", MessageSet::WARNING_NOTE);
             }
             $conf->feedback_msg($aset->message_list());
             return new Redirection($conf->site_referrer_url($qreq));

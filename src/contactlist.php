@@ -1,6 +1,6 @@
 <?php
 // contactlist.php -- HotCRP helper class for producing lists of contacts
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class ContactList {
     const FIELD_SELECTOR = 1000;
@@ -21,6 +21,9 @@ class ContactList {
     const FIELD_SHEPHERDS = 14;
     const FIELD_TAGS = 15;
     const FIELD_COLLABORATORS = 16;
+    const FIELD_INCOMPLETE_REVIEWS = 17;
+    const FIELD_FIRST = 40;
+    const FIELD_LAST = 41;
     const FIELD_SCORE = 50;
 
     /** @var list<string> */
@@ -63,10 +66,14 @@ class ContactList {
     private $_lead_data;
     /** @var array<int,int> */
     private $_shepherd_data;
-    /** @var list<Score_ReviewField> */
+    /** @var list<Discrete_ReviewField> */
     private $_rfields = [];
-    /** @var list<array<int,list<int>>> */
-    private $_score_data;
+    /** @var list<Discrete_ReviewField> */
+    private $_wfields = [];
+    /** @var array<int,list<int>> */
+    private $_score1_data = [];
+    /** @var array<int,list<int>> */
+    private $_scorex_data = [];
     /** @var array<int,array{int,int}> */
     private $_rating_data;
     /** @var array<int,true> */
@@ -85,7 +92,7 @@ class ContactList {
 
         $this->tagger = new Tagger($this->user);
         foreach ($this->conf->review_form()->viewable_fields($this->user) as $f) {
-            if ($f instanceof Score_ReviewField)
+            if ($f instanceof Discrete_ReviewField)
                 $this->_rfields[] = $f;
         }
 
@@ -118,19 +125,25 @@ class ContactList {
             return ["sel", 1, 0, self::FIELD_SELECTOR, "selon"];
         case self::FIELD_NAME:
         case "name":
-            return ['name', 1, 1, self::FIELD_NAME, "name"];
+            return ["name", 1, 1, self::FIELD_NAME, "name"];
+        case self::FIELD_FIRST:
+        case "first":
+            return ["", 0, 0, self::FIELD_FIRST, "first"];
+        case self::FIELD_LAST:
+        case "last":
+            return ["", 0, 0, self::FIELD_LAST, "last"];
         case self::FIELD_EMAIL:
         case "email":
-            return ['email', 1, 1, self::FIELD_EMAIL, "email"];
+            return ["email", 1, 1, self::FIELD_EMAIL, "email"];
         case self::FIELD_AFFILIATION:
         case "aff":
-            return ['affiliation', 1, 1, self::FIELD_AFFILIATION, "aff"];
+            return ["affiliation", 1, 1, self::FIELD_AFFILIATION, "aff"];
         case self::FIELD_AFFILIATION_ROW:
         case "affrow":
-            return ['affrow', 4, 0, self::FIELD_AFFILIATION_ROW, "affrow"];
+            return ["affrow", 4, 0, self::FIELD_AFFILIATION_ROW, "affrow"];
         case self::FIELD_LASTVISIT:
         case "lastvisit":
-            return ['lastvisit', 1, 1, self::FIELD_LASTVISIT, "lastvisit"];
+            return ["lastvisit", 1, 1, self::FIELD_LASTVISIT, "lastvisit"];
         case self::FIELD_HIGHTOPICS:
         case "topicshi":
             return ['topics', 3, 0, self::FIELD_HIGHTOPICS, "topicshi"];
@@ -140,6 +153,9 @@ class ContactList {
         case self::FIELD_REVIEWS:
         case "reviews":
             return ['revstat', 1, 1, self::FIELD_REVIEWS, "reviews"];
+        case self::FIELD_INCOMPLETE_REVIEWS:
+        case "ire":
+            return ['revstat', 1, 1, self::FIELD_INCOMPLETE_REVIEWS, "ire"];
         case self::FIELD_REVIEW_RATINGS:
         case "revratings":
             return ['revstat', 1, 1, self::FIELD_REVIEW_RATINGS, "revratings"];
@@ -194,6 +210,7 @@ class ContactList {
             $this->have_folds["topics"] = $this->qopt["topics"] = true;
             break;
         case self::FIELD_REVIEWS:
+        case self::FIELD_INCOMPLETE_REVIEWS:
             $this->qopt["reviews"] = true;
             break;
         case self::FIELD_LEADS:
@@ -229,10 +246,28 @@ class ContactList {
                 return false;
             }
             $this->qopt["reviews"] = true;
-            $this->qopt["scores"][] = $f;
+            if (!in_array($f, $this->_wfields)) {
+                $this->_wfields[] = $f;
+            }
             break;
         }
         return true;
+    }
+
+    /** @param int $uid
+     * @param ReviewField $f
+     * @return list<int> */
+    private function _extract_scores($uid, $f) {
+        if (count($this->_wfields) === 1 && $f === $this->_wfields[0]) {
+            return $this->_score1_data[$uid] ?? [];
+        }
+        $s = [];
+        $sx = $this->_scorex_data[$uid] ?? [];
+        for ($i = 0; $i !== count($sx); $i += 2) {
+            if ($sx[$i] === $f->order)
+                $s[] = $sx[$i + 1];
+        }
+        return $s;
     }
 
     function _sortBase($a, $b) {
@@ -256,6 +291,12 @@ class ContactList {
         $ac = $this->_rect_data[$a->contactId] ?? [0, 0];
         $bc = $this->_rect_data[$b->contactId] ?? [0, 0];
         return $bc[1] <=> $ac[1] ? : ($bc[0] <=> $ac[0] ? : $this->_sortBase($a, $b));
+    }
+
+    function _sortIncompleteReviews($a, $b) {
+        $ac = $this->_rect_data[$a->contactId] ?? [0, 0];
+        $bc = $this->_rect_data[$b->contactId] ?? [0, 0];
+        return $bc[0] <=> $ac[0] ? : $this->_sortBase($a, $b);
     }
 
     function _sortLeads($a, $b) {
@@ -321,6 +362,11 @@ class ContactList {
         case self::FIELD_NAME:
             usort($rows, [$this, "_sortBase"]);
             break;
+        case self::FIELD_FIRST:
+        case self::FIELD_LAST:
+            $compar = $this->conf->user_comparator($this->sortField === self::FIELD_LAST);
+            usort($rows, $compar);
+            break;
         case self::FIELD_EMAIL:
             usort($rows, [$this, "_sortEmail"]);
             break;
@@ -333,6 +379,9 @@ class ContactList {
             break;
         case self::FIELD_REVIEWS:
             usort($rows, [$this, "_sortReviews"]);
+            break;
+        case self::FIELD_INCOMPLETE_REVIEWS:
+            usort($rows, [$this, "_sortIncompleteReviews"]);
             break;
         case self::FIELD_LEADS:
             usort($rows, [$this, "_sortLeads"]);
@@ -351,13 +400,12 @@ class ContactList {
             break;
         default:
             $f = $this->_rfields[$this->sortField - self::FIELD_SCORE];
-            $scoresort = $this->qreq->csession("ulscoresort") ?? "A";
-            if (!in_array($scoresort, ["A", "V", "D"], true)) {
-                $scoresort = "A";
+            $scoresort = $this->qreq->csession("ulscoresort") ?? "average";
+            if (!in_array($scoresort, ["average", "variance", "maxmin"], true)) {
+                $scoresort = "average";
             }
             foreach ($rows as $row) {
-                $scores = $this->_score_data[$f->order][$row->contactId] ?? [];
-                $scoreinfo = new ScoreInfo($scores, true);
+                $scoreinfo = new ScoreInfo($this->_extract_scores($row->contactId, $f));
                 $this->_sort_data[$row->contactId] =
                     [$scoreinfo->sort_data($scoresort), $scoreinfo->mean()];
             }
@@ -389,7 +437,17 @@ class ContactList {
         case self::FIELD_LOWTOPICS:
             return "Low-interest topics";
         case self::FIELD_REVIEWS:
-            return '<span class="hastitle" title="“1/2” means 1 complete review out of 2 assigned reviews">Reviews</span>';
+            if ($this->limit === "extsub") {
+                return "Completed reviews";
+            } else {
+                return '<span class="hastitle" title="“1/2” means 1 complete review out of 2 assigned reviews">Reviews</span>';
+            }
+        case self::FIELD_INCOMPLETE_REVIEWS:
+            if ($this->limit === "extrev-not-accepted") {
+                return "Outstanding review requests";
+            } else {
+                return "Incomplete reviews";
+            }
         case self::FIELD_LEADS:
             return "Leads";
         case self::FIELD_SHEPHERDS:
@@ -422,9 +480,8 @@ class ContactList {
     }
 
     /** @param PaperInfo $prow
-     * @param ReviewInfo $rrow
-     * @param list<int> $forders */
-    private function collect_review_data($prow, $rrow, $repapers, $review_limit, $forders) {
+     * @param ReviewInfo $rrow */
+    private function collect_review_data($prow, $rrow, $repapers, $review_limit) {
         $cid = $rrow->contactId;
         if ($repapers) {
             $this->_re_data[$cid][] = $rrow->paperId;
@@ -433,22 +490,38 @@ class ContactList {
         if ($review_limit
             && ($rrow->reviewStatus >= ReviewInfo::RS_ADOPTED || $prow->timeSubmitted > 0 || $review_limit === "all")) {
             if ($this->limit === "re"
-                || ($this->limit === "req" && $rrow->reviewType == REVIEW_EXTERNAL && $rrow->requestedBy == $this->user->contactId)
-                || ($this->limit === "ext" && $rrow->reviewType == REVIEW_EXTERNAL)
-                || ($this->limit === "extsub" && $rrow->reviewType == REVIEW_EXTERNAL && $rrow->reviewStatus >= ReviewInfo::RS_ADOPTED)) {
+                || ($this->limit === "req" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->requestedBy == $this->user->contactId)
+                || ($this->limit === "ext" && $rrow->reviewType === REVIEW_EXTERNAL)
+                || ($this->limit === "extsub" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->reviewStatus >= ReviewInfo::RS_ADOPTED)
+                || ($this->limit === "extrev-not-accepted" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->reviewStatus === ReviewInfo::RS_EMPTY)) {
                 $this->_limit_cids[$cid] = true;
             }
         }
         if (!isset($this->_rect_data[$cid])) {
             $this->_rect_data[$cid] = [0, 0];
         }
+        if (($this->limit === "extsub" && $rrow->reviewStatus < ReviewInfo::RS_ADOPTED)
+            || ($this->limit === "extrev-not-accepted" && $rrow->reviewStatus !== ReviewInfo::RS_EMPTY)) {
+            return;
+        }
         if ($rrow->reviewStatus >= ReviewInfo::RS_ADOPTED) {
             $this->_rect_data[$cid][0] += 1;
             $this->_rect_data[$cid][1] += 1;
             if ($this->user->can_view_review($prow, $rrow)) {
-                foreach ($forders as $i) {
-                    if ($rrow->fields[$i]) {
-                        $this->_score_data[$i][$cid][] = $rrow->fields[$i];
+                $bound = $this->user->view_score_bound($prow, $rrow);
+                if (count($this->_wfields) === 1) {
+                    $f = $this->_wfields[0];
+                    if ($f->view_score > $bound
+                        && ($fv = $rrow->fval($f)) !== null) {
+                        $this->_score1_data[$cid][] = $fv;
+                    }
+                } else {
+                    foreach ($this->_wfields as $f) {
+                        if ($f->view_score > $bound
+                            && ($fv = $rrow->fval($f)) !== null) {
+                            $this->_scorex_data[$cid][] = $f->order;
+                            $this->_scorex_data[$cid][] = $fv;
+                        }
                     }
                 }
             }
@@ -477,7 +550,7 @@ class ContactList {
 
     private function collect_paper_data() {
         $limit = $this->limit;
-        $review_limit = in_array($limit, ["re", "req", "ext", "extsub", "all"]) ? $limit : null;
+        $review_limit = in_array($limit, ["re", "req", "ext", "extsub", "extrev-not-accepted", "all"]) ? $limit : null;
 
         $args = [];
         if (isset($this->qopt["papers"])) {
@@ -485,8 +558,8 @@ class ContactList {
         }
         if (isset($this->qopt["reviews"]) || $review_limit) {
             $args["reviewSignatures"] = true;
-            if (isset($this->qopt["scores"])) {
-                $args["scores"] = $this->qopt["scores"];
+            if ($this->_wfields) {
+                $args["scores"] = $this->_wfields;
             }
         }
         if ($limit === "req") {
@@ -518,8 +591,8 @@ class ContactList {
             $this->_limit_cids = [];
             foreach ($prows as $prow) {
                 if ($this->test_paper_authors($prow)) {
-                    foreach ($prow->contacts() as $cid => $cflt) {
-                        $this->_limit_cids[$cid] = true;
+                    foreach ($prow->contact_list() as $u) {
+                        $this->_limit_cids[$u->contactId] = true;
                     }
                 }
             }
@@ -532,10 +605,10 @@ class ContactList {
             $this->_au_unsub = [];
             foreach ($prows as $prow) {
                 if ($this->test_paper_authors($prow)) {
-                    foreach ($prow->contacts() as $cflt) {
-                        $this->_au_data[$cflt->contactId][] = $prow->paperId;
+                    foreach ($prow->contact_list() as $u) {
+                        $this->_au_data[$u->contactId][] = $prow->paperId;
                         if ($prow->timeSubmitted <= 0) {
-                            $this->_au_unsub[$cflt->contactId] = true;
+                            $this->_au_unsub[$u->contactId] = true;
                         }
                     }
                 }
@@ -548,18 +621,13 @@ class ContactList {
             if ($repapers) {
                 $this->_re_data = $this->_reord_data = [];
             }
-            $forders = [];
-            foreach ($this->qopt["scores"] ?? [] as $f) {
-                $forders[] = $f->order;
-            }
-            $this->_score_data = $this->conf->review_form()->order_array([]);
             foreach ($prows as $prow) {
                 if ($this->user->can_view_review_assignment($prow, null)
                     && $this->user->can_view_review_identity($prow, null)) {
                     foreach ($prow->all_reviews() as $rrow) {
                         if ($this->user->can_view_review_assignment($prow, $rrow)
                             && $this->user->can_view_review_identity($prow, $rrow)) {
-                            $this->collect_review_data($prow, $rrow, $repapers, $review_limit, $forders);
+                            $this->collect_review_data($prow, $rrow, $repapers, $review_limit);
                         }
                     }
                 }
@@ -710,6 +778,12 @@ class ContactList {
             } else {
                 return "";
             }
+        case self::FIELD_INCOMPLETE_REVIEWS:
+            if (($ct = $this->_rect_data[$row->contactId] ?? null)) {
+                return "<a href=\"" . $this->conf->hoturl("search", "t=s&amp;q=ire:" . urlencode($row->email)) . "\">{$ct[0]}</a>";
+            } else {
+                return "";
+            }
         case self::FIELD_LEADS:
             if (($c = $this->_lead_data[$row->contactId] ?? null)) {
                 return "<a href=\"" . $this->conf->hoturl("search", "t=s&amp;q=lead:" . urlencode($row->email)) . "\">$c</a>";
@@ -808,8 +882,8 @@ class ContactList {
                 || $this->user->privChair
                 || $this->limit === "req") {
                 $f = $this->_rfields[$fieldId - self::FIELD_SCORE];
-                if (($scores = $this->_score_data[$f->order][$row->contactId] ?? [])) {
-                    return $f->unparse_graph(new ScoreInfo($scores, true), 2);
+                if (($scores = $this->_extract_scores($row->contactId, $f))) {
+                    return $f->unparse_graph(new ScoreInfo($scores), Discrete_ReviewField::GRAPH_PROPORTIONS);
                 }
             }
             return "";
@@ -855,6 +929,8 @@ class ContactList {
         case "ext":
         case "extsub":
             return $this->addScores([self::FIELD_SELECTOR, self::FIELD_NAME, self::FIELD_EMAIL, self::FIELD_AFFILIATION, self::FIELD_LASTVISIT, self::FIELD_COLLABORATORS, self::FIELD_HIGHTOPICS, self::FIELD_LOWTOPICS, self::FIELD_REVIEWS, self::FIELD_REVIEW_RATINGS, self::FIELD_REVIEW_PAPERS]);
+        case "extrev-not-accepted":
+            return $this->addScores([self::FIELD_SELECTOR, self::FIELD_NAME, self::FIELD_EMAIL, self::FIELD_AFFILIATION, self::FIELD_LASTVISIT, self::FIELD_COLLABORATORS, self::FIELD_HIGHTOPICS, self::FIELD_LOWTOPICS, self::FIELD_INCOMPLETE_REVIEWS, self::FIELD_REVIEW_PAPERS]);
         case "req":
             return $this->addScores([self::FIELD_SELECTOR, self::FIELD_NAME, self::FIELD_EMAIL, self::FIELD_AFFILIATION, self::FIELD_LASTVISIT, self::FIELD_TAGS, self::FIELD_COLLABORATORS, self::FIELD_HIGHTOPICS, self::FIELD_LOWTOPICS, self::FIELD_REVIEWS, self::FIELD_REVIEW_RATINGS, self::FIELD_REVIEW_PAPERS]);
         case "au":
@@ -900,7 +976,7 @@ class ContactList {
                 . Ht::submit("fn", "Go", ["value" => "modify", "class" => "uic js-submit-list ml-2"])];
         }
 
-        return "  <tfoot class=\"pltable" . ($hascolors ? " pltable-colored" : "")
+        return "  <tfoot class=\"pltable-tfoot" . ($hascolors ? " pltable-colored" : "")
             . "\">" . PaperList::render_footer_row(1, $ncol - 1,
                 "<b>Select people</b> (or <a class=\"ui js-select-all\" href=\"\">select all {$this->count}</a>), then&nbsp; ",
                 $lllgroups)
@@ -944,6 +1020,19 @@ class ContactList {
         return $rows;
     }
 
+    private function _next_sort_link($sortUrl) {
+        $fld = $this->sortField;
+        if ($fld === self::FIELD_NAME) {
+            $fld = $this->conf->sort_by_last ? self::FIELD_LAST : self::FIELD_FIRST;
+        }
+        if (($fld === self::FIELD_LAST || $fld === self::FIELD_FIRST)
+            && $this->reverseSort) {
+            $fld = $fld === self::FIELD_LAST ? self::FIELD_FIRST : self::FIELD_LAST;
+        }
+        $fspec = $this->_fieldspec($fld);
+        return $sortUrl . ($this->reverseSort ? "" : "-") . $fspec[4];
+    }
+
     function table_html($listname, $url, $listtitle = "", $foldsession = null) {
         // PC tags
         $listquery = $listname;
@@ -984,7 +1073,9 @@ class ContactList {
 
         // sort rows
         if (!$this->sortField
-            || !($acceptable_fields[$this->sortField] ?? false)) {
+            || (!($acceptable_fields[$this->sortField] ?? false)
+                && $this->sortField !== self::FIELD_FIRST
+                && $this->sortField !== self::FIELD_LAST)) {
             $this->sortField = self::FIELD_NAME;
         }
         $srows = $this->_sort($rows);
@@ -1104,24 +1195,28 @@ class ContactList {
         }
         $x .= "\">\n";
 
-        $x .= "  <thead class=\"pltable\">\n  <tr class=\"pl_headrow\">\n";
+        $x .= "  <thead class=\"pltable-thead\">\n  <tr class=\"pl_headrow\">\n";
 
         if ($this->sortable && $url) {
             $sortUrl = $url . (strpos($url, "?") ? "&amp;" : "?") . "sort=";
+            $sortField = $this->sortField;
+            if ($sortField === self::FIELD_FIRST || $sortField === self::FIELD_LAST) {
+                $sortField = self::FIELD_NAME;
+            }
             $q = '<a class="pl_sort" rel="nofollow" href="' . $sortUrl;
             foreach ($fieldDef as $fieldId => $fdef) {
                 if ($fdef[1] != 1) {
                     continue;
                 } else if (!isset($anyData[$fieldId])) {
-                    $x .= "    <th class=\"pl plh pl_$fdef[0]\"></th>\n";
+                    $x .= "    <th class=\"pl plh pl_{$fdef[0]}\"></th>\n";
                     continue;
                 }
-                $x .= "    <th class=\"pl plh pl_$fdef[0]\">";
+                $x .= "    <th class=\"pl plh pl_{$fdef[0]}\">";
                 $ftext = $this->header($fieldId);
-                if ($fieldId === $this->sortField) {
-                    $rev = $this->reverseSort ? "" : "-";
-                    $x .= '<a class="pl_sort pl_sorting' . ($this->reverseSort ? "_rev" : "_fwd")
-                        . "\" rel=\"nofollow\" href=\"{$sortUrl}{$rev}{$fdef[4]}\">{$ftext}</a>";
+                if ($fieldId === $sortField) {
+                    $klass = $this->reverseSort ? "sort-descending" : "sort-ascending";
+                    $qx = $this->_next_sort_link($sortUrl);
+                    $x .= "<a class=\"pl_sort {$klass}\" rel=\"nofollow\" href=\"{$qx}\">{$ftext}</a>";
                 } else if ($fdef[2]) {
                     $x .= "{$q}{$fdef[4]}\">{$ftext}</a>";
                 } else {
@@ -1133,10 +1228,10 @@ class ContactList {
         } else {
             foreach ($fieldDef as $fieldId => $fdef) {
                 if ($fdef[1] == 1 && isset($anyData[$fieldId])) {
-                    $x .= "    <th class=\"pl plh pl_$fdef[0]\">"
+                    $x .= "    <th class=\"pl plh pl_{$fdef[0]}\">"
                         . $this->header($fieldId) . "</th>\n";
                 } else if ($fdef[1] == 1) {
-                    $x .= "    <th class=\"pl plh pl_$fdef[0]\"></th>\n";
+                    $x .= "    <th class=\"pl plh pl_{$fdef[0]}\"></th>\n";
                 }
             }
         }
@@ -1148,7 +1243,7 @@ class ContactList {
             $x .= $this->footer($ncol, $hascolors);
         }
 
-        $x .= "<tbody class=\"pltable" . ($hascolors ? " pltable-colored" : "");
+        $x .= "<tbody class=\"pltable-tbody" . ($hascolors ? " pltable-colored" : "");
         if ($this->user->privChair) {
             $listlink = $listname;
             if ($listlink === "pcadminx") {
@@ -1186,5 +1281,4 @@ class ContactList {
         // run query
         return $this->_rows();
     }
-
 }

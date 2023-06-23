@@ -36,13 +36,14 @@ class Help_Page {
             } else if (!$want_topic) {
                 $topic = "list";
                 http_response_code(404);
-                $conf->error_msg("<0>Help topic not found.");
+                $conf->error_msg("<0>Help topic ‘{$qreq->t}’ not found");
             }
         }
         $topicj = $help_topics->get($topic);
 
         $qreq->print_header("Help", "help", [
-            "title_div" => '<hr class="c">', "body_class" => "leftmenu",
+            "title_div" => "",
+            "body_class" => "leftmenu",
             "save_messages" => true
         ]);
 

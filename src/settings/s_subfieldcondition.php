@@ -1,6 +1,6 @@
 <?php
 // settings/s_subfieldcondition.php -- HotCRP submission field conditions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class SubFieldCondition_SettingParser extends SettingParser {
     /** @param SettingValues $sv
@@ -16,7 +16,7 @@ class SubFieldCondition_SettingParser extends SettingParser {
         }
         try {
             $fake_prow = PaperInfo::make_placeholder($sv->conf, -1);
-            if ($ps->term()->script_expression($fake_prow) === null) {
+            if ($ps->main_term()->script_expression($fake_prow) === null) {
                 $sv->msg_at("{$pfx}/presence", "", $status);
                 $sv->msg_at("{$pfx}/condition", "<0>Invalid search in field condition", $status);
                 $sv->inform_at("{$pfx}/condition", "<0>Field conditions are limited to simple search keywords.");
@@ -41,7 +41,7 @@ class SubFieldCondition_SettingParser extends SettingParser {
     static function crosscheck(SettingValues $sv) {
         if ($sv->has_interest("sf")) {
             $opts = Options_SettingParser::configurable_options($sv->conf);
-            foreach (array_values($opts) as $ctrz => $f) {
+            foreach ($opts as $ctrz => $f) {
                 if ($f->exists_condition())
                     self::validate1($sv, "sf/" . ($ctrz + 1), $f, $f->exists_condition(), 1);
             }
@@ -51,7 +51,7 @@ class SubFieldCondition_SettingParser extends SettingParser {
     static function validate(SettingValues $sv) {
         $opts = Options_SettingParser::configurable_options($sv->conf);
         $osp = $sv->cs()->callable("Options_SettingParser");
-        foreach (array_values($opts) as $f) {
+        foreach ($opts as $f) {
             if ($f->exists_condition() && isset($osp->option_id_to_ctr[$f->id]))
                 self::validate1($sv, "sf/" . $osp->option_id_to_ctr[$f->id], $f, $f->exists_condition(), 2);
         }

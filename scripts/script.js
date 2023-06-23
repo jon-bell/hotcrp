@@ -1,8 +1,9 @@
 // script.js -- HotCRP JavaScript library
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 "use strict";
 var siteinfo, hotcrp, hotcrp_status;
+hotcrp = {};
 
 function $$(id) {
     return document.getElementById(id);
@@ -25,12 +26,6 @@ if (!window.JSON || !window.JSON.parse) {
     window.JSON = {parse: $.parseJSON};
 }
 
-var __last_json_parse;
-function parse_json(s) {
-    __last_json_parse = s;
-    return JSON.parse(s);
-}
-
 if (typeof Object.assign !== "function") {
     Object.defineProperty(Object, "assign", {
         value: function assign(target /* , ... */) {
@@ -44,6 +39,14 @@ if (typeof Object.assign !== "function") {
                 }
             }
             return d;
+        }, writable: true, configurable: true
+    });
+}
+if (typeof Object.setPrototypeOf !== "function") {
+    Object.defineProperty(Object, "setPrototypeOf", {
+        value: function setPrototypeOf(obj, proto) {
+            obj && typeof obj === "object" && (obj.__proto__ = proto);
+            return obj;
         }, writable: true, configurable: true
     });
 }
@@ -143,6 +146,16 @@ if (!Element.prototype.closest) {
         return $(this).closest(s)[0];
     };
 }
+if (!Document.prototype.querySelector) {
+    Document.prototype.querySelector = function (s) {
+        return $(s)[0] || null;
+    };
+}
+if (!Element.prototype.querySelector) {
+    Element.prototype.querySelector = function (s) {
+        return $(this).find(s)[0] || null;
+    };
+}
 if (!Element.prototype.append) {
     Element.prototype.append = function () {
         for (var i = 0; i !== arguments.length; ++i) {
@@ -150,6 +163,16 @@ if (!Element.prototype.append) {
             if (typeof e === "string")
                 e = document.createTextNode(e);
             this.appendChild(e);
+        }
+    };
+}
+if (!Element.prototype.prepend) {
+    Element.prototype.prepend = function () {
+        for (var i = arguments.length; i !== 0; --i) {
+            var e = arguments[i - 1];
+            if (typeof e === "string")
+                e = document.createTextNode(e);
+            this.insertBefore(e, this.firstChild);
         }
     };
 }
@@ -161,6 +184,28 @@ if (!Element.prototype.replaceChildren) {
         }
         for (i = 0; i !== arguments.length; ++i) {
             this.append(arguments[i]);
+        }
+    };
+}
+if (!Element.prototype.after) {
+    Element.prototype.after = function () {
+        var p = this.parentNode, n = this.nextSibling;
+        for (var i = 0; i !== arguments.length; ++i) {
+            var e = arguments[i];
+            if (typeof e === "string")
+                e = document.createTextNode(e);
+            p.insertBefore(e, n);
+        }
+    };
+}
+if (!Element.prototype.before) {
+    Element.prototype.before = function () {
+        var p = this.parentNode;
+        for (var i = 0; i !== arguments.length; ++i) {
+            var e = arguments[i];
+            if (typeof e === "string")
+                e = document.createTextNode(e);
+            p.insertBefore(e, this);
         }
     };
 }
@@ -189,6 +234,11 @@ if (!HTMLInputElement.prototype.setRangeText) {
             }
             this.setSelectionRange(ss, se);
         }
+    };
+}
+if (!window.queueMicrotask) {
+    window.queueMicrotask = function (f) {
+        setTimeout(f, 0);
     };
 }
 
@@ -310,8 +360,6 @@ function log_jserror(errormsg, error, noconsole) {
         errormsg = {"error": error.toString()};
     } else if (typeof errormsg === "string")
         errormsg = {"error": errormsg};
-    if (errormsg.error && /JSON/.test(errormsg.error) && __last_json_parse)
-        errormsg.detail = __last_json_parse.substring(0, 200);
     if (error && error.fileName && !errormsg.url)
         errormsg.url = error.fileName;
     if (error && error.lineNumber && !errormsg.lineno)
@@ -372,7 +420,7 @@ function check_message_list(data, options) {
 }
 
 function check_sessioninfo(data, options) {
-    if (siteinfo.user.cid == data.sessioninfo.cid) {
+    if (siteinfo.user.uid == data.sessioninfo.uid) {
         siteinfo.postvalue = data.sessioninfo.postvalue;
         $("form").each(function () {
             var m = /^([^#]*[&?;]post=)([^&?;#]*)/.exec(this.action);
@@ -394,7 +442,7 @@ $(document).ajaxError(function (evt, jqxhr, options, httperror) {
     var data;
     if (jqxhr.responseText && jqxhr.responseText.charAt(0) === "{") {
         try {
-            data = parse_json(jqxhr.responseText);
+            data = JSON.parse(jqxhr.responseText);
         } catch (e) {
         }
     }
@@ -430,7 +478,7 @@ $.ajaxPrefilter(function (options) {
         if (typeof data === "object"
             && data.sessioninfo
             && options.url.startsWith(siteinfo.site_relative)
-            && (siteinfo.site_relative !== "" || !/^(?:[a-z][-a-z0-9+.]*:|\/|\.\.(?:\/|\z))/i.test(options.url))) {
+            && (siteinfo.site_relative !== "" || !/^(?:[a-z][-a-z0-9+.]*:|\/|\.\.(?:\/|$))/i.test(options.url))) {
             check_sessioninfo(data, options);
         }
     }
@@ -439,7 +487,7 @@ $.ajaxPrefilter(function (options) {
         if (/application\/json/.test(jqxhr.getResponseHeader("Content-Type") || "")
             && jqxhr.responseText) {
             try {
-                rjson = parse_json(jqxhr.responseText);
+                rjson = JSON.parse(jqxhr.responseText);
             } catch (e) {
             }
         }
@@ -486,71 +534,85 @@ return {
 
 
 // geometry
-jQuery.fn.extend({
-    geometry: function (outer) {
-        var g, d;
-        if (this[0] == window) {
-            g = {left: this.scrollLeft(), top: this.scrollTop()};
-        } else if (this.length == 1 && this[0].getBoundingClientRect) {
-            g = jQuery.extend({}, this[0].getBoundingClientRect());
-            if ((d = window.pageXOffset)) {
-                g.left += d, g.right += d;
-            }
-            if ((d = window.pageYOffset)) {
-                g.top += d, g.bottom += d;
-            }
-            if (!("width" in g)) {
-                g.width = g.right - g.left;
-                g.height = g.bottom - g.top;
-            }
-            return g;
-        } else {
-            g = this.offset();
+(function () {
+
+function geometry(outer) {
+    var g, d;
+    if (this[0] == window) {
+        g = {left: this.scrollLeft(), top: this.scrollTop()};
+    } else if (this.length == 1 && this[0].getBoundingClientRect) {
+        g = jQuery.extend({}, this[0].getBoundingClientRect());
+        if ((d = window.pageXOffset)) {
+            g.left += d, g.right += d;
         }
-        if (g) {
-            g.width = outer ? this.outerWidth() : this.width();
-            g.height = outer ? this.outerHeight() : this.height();
-            g.right = g.left + g.width;
-            g.bottom = g.top + g.height;
+        if ((d = window.pageYOffset)) {
+            g.top += d, g.bottom += d;
+        }
+        if (!("width" in g)) {
+            g.width = g.right - g.left;
+            g.height = g.bottom - g.top;
         }
         return g;
-    },
-    scrollIntoView: function (opts) {
-        for (var i = 0; i !== this.length; ++i) {
-            var e = this[i],
-                root = document.documentElement,
-                eopts = opts || {};
-            while (e && e.nodeType !== 1) {
-                e = e.parentNode;
-            }
-            while (e !== root) {
-                var er = e.getBoundingClientRect(),
-                    p = e.parentNode;
-                while (p !== root && window.getComputedStyle(p).overflowY === "visible") {
-                    p = p.parentNode;
-                }
-                var pr = p.getBoundingClientRect(),
-                    mt = eopts.marginTop || 0,
-                    mb = eopts.marginBottom || 0;
-                if (mt === "auto") {
-                    mt = parseFloat(window.getComputedStyle(e).marginTop);
-                }
-                if (mb === "auto") {
-                    mb = parseFloat(window.getComputedStyle(e).marginBottom);
-                }
-                if ((er.top - mt < pr.top && !eopts.atBottom)
-                    || (er.bottom + mb > pr.bottom && eopts.atTop)) {
-                    p.scrollBy(0, er.top - mt - pr.top);
-                } else if (er.bottom + mb > pr.bottom) {
-                    p.scrollBy(0, er.bottom + mb - pr.bottom);
-                }
-                e = p;
-                eopts = {};
-            }
-        }
-        return this;
+    } else {
+        g = this.offset();
     }
-});
+    if (g) {
+        g.width = outer ? this.outerWidth() : this.width();
+        g.height = outer ? this.outerHeight() : this.height();
+        g.right = g.left + g.width;
+        g.bottom = g.top + g.height;
+    }
+    return g;
+}
+
+function scrollIntoView1(e, opts) {
+    var root = document.documentElement;
+    while (e && e.nodeType !== 1) {
+        e = e.parentNode;
+    }
+    var p = e.parentNode, pr, er, mt, mb, wh = window.innerHeight;
+    while (p !== root && window.getComputedStyle(p).overflowY === "visible") {
+        p = p.parentNode;
+    }
+    if (p !== root) {
+        scrollIntoView1(p, {});
+        pr = p.getBoundingClientRect();
+        if (pr.bottom < 0 || pr.top > wh) {
+            return; // it's hopeless, nothing to do
+        }
+        er = e.getBoundingClientRect();
+        if (pr.top > 0) {
+            er = {top: er.top - pr.top, bottom: er.bottom - pr.top};
+        }
+        wh = Math.min(wh, pr.bottom - pr.top);
+    } else {
+        er = e.getBoundingClientRect();
+    }
+    mt = opts.marginTop || 0;
+    if (mt === "auto") {
+        mt = parseFloat(window.getComputedStyle(e).marginTop);
+    }
+    mb = opts.marginBottom || 0;
+    if (mb === "auto") {
+        mb = parseFloat(window.getComputedStyle(e).marginBottom);
+    }
+    if ((er.top - mt < 0 && !opts.atBottom)
+        || (er.bottom + mb > wh && (opts.atTop || er.bottom - er.top > wh))) {
+        p.scrollBy(0, er.top - mt);
+    } else if (er.bottom + mb > wh) {
+        p.scrollBy(0, er.bottom + mb - wh);
+    }
+}
+
+function scrollIntoView(opts) {
+    for (var i = 0; i !== this.length; ++i) {
+        scrollIntoView1(this[i], opts || {});
+    }
+    return this;
+}
+
+jQuery.fn.extend({geometry: geometry, scrollIntoView: scrollIntoView});
+})();
 
 function geometry_translate(g, dx, dy) {
     if (typeof dx === "object")
@@ -977,6 +1039,11 @@ event_key.is_default_a = function (evt, a) {
         && evt.button == 0
         && (!a || !hasClass("ui", a));
 };
+event_key.is_submit_enter = function (evt, allow_none) {
+    return !evt.shiftKey && !evt.altKey
+        && (allow_none || evt.metaKey || evt.ctrlKey)
+        && event_key(evt) === "Enter";
+};
 return event_key;
 })();
 
@@ -1030,18 +1097,163 @@ try {
 }
 wstorage.json = function (is_session, key) {
     var x = wstorage(is_session, key);
-    return x ? parse_json(x) : false;
+    return x ? JSON.parse(x) : false;
+};
+wstorage.site_key = function (key) {
+    return siteinfo.base + key;
 };
 wstorage.site = function (is_session, key, value) {
-    if (siteinfo.base !== "/")
-        key = siteinfo.base + key;
-    return wstorage(is_session, key, value);
+    return wstorage(is_session, wstorage.site_key(key), value);
 };
 wstorage.site_json = function (is_session, key) {
-    if (siteinfo.base !== "/")
-        key = siteinfo.base + key;
-    return wstorage.json(is_session, key);
+    return wstorage.json(is_session, wstorage.site_key(key));
 };
+
+
+// dragging
+(function () {
+function drag_scroll(evt, group) {
+    var wh = window.innerHeight,
+        tsb = Math.min(wh * 0.125, 200), bsb = wh - tsb,
+        g, x;
+    if (evt.clientY < tsb || evt.clientY > bsb) {
+        g = group ? group.getBoundingClientRect() : {top: 0, bottom: bsb};
+        if (evt.clientY < tsb && g.top < tsb / 2) {
+            x = evt.clientY < 20 ? 1 : Math.pow((tsb - evt.clientY) / tsb, 2.5);
+            window.scrollBy({left: 0, top: -x * 32, behavior: "smooth"});
+        } else if (evt.clientY > bsb && g.bottom > bsb + tsb / 2) {
+            x = evt.clientY > wh - 20 ? 1 : Math.pow((evt.clientY - bsb) / tsb, 2.5);
+            window.scrollBy({left: 0, top: x * 32, behavior: "smooth"});
+        }
+    }
+}
+
+hotcrp.drag_block_reorder = function (draghandle, draggable, callback) {
+    var group = draggable.parentElement,
+        pos, posy0, posy1, contained = 0, sep, changed = false, ncol;
+    function make_tr_dropmark() {
+        var tr, td;
+        if (ncol == null) {
+            ncol = 0;
+            td = group.closest("table").querySelector("td, th");
+            while (td) {
+                ncol += td.colSpan;
+                td = td.nextElementSibling;
+            }
+        }
+        var td = classe("td", null, sep);
+        td.colSpan = ncol;
+        sep = classe("tr", "dropmark", td);
+    }
+    function dragover(evt) {
+        evt.preventDefault();
+        evt.dropEffect = "move";
+
+        if (!contained) {
+            sep && sep.remove();
+            pos = posy0 = posy1 = sep = null;
+            addClass(draggable, "drag-would-keep");
+            removeClass(draggable, "drag-would-move");
+            return;
+        }
+
+        drag_scroll(evt, group);
+        if (posy0 !== null && evt.clientY >= posy0 && evt.clientY < posy1) {
+            return;
+        }
+
+        posy0 = null;
+        posy1 = -100;
+        var g;
+        for (pos = group.firstElementChild; pos; pos = pos.nextElementSibling) {
+            if (hasClass(pos, "dropmark")
+                || (g = pos.getBoundingClientRect()).height === 0) {
+                continue;
+            }
+            posy0 = posy1;
+            if (!hasClass(pos, "dragging")) {
+                posy1 = (g.top + g.bottom) / 2;
+                if (evt.clientY >= posy0 && evt.clientY < posy1) {
+                    break;
+                }
+            }
+        }
+        if (pos === null) {
+            posy0 = posy1;
+            posy1 = Infinity;
+        }
+
+        changed = pos !== draggable.nextElementSibling;
+        if (sep && sep.nextElementSibling === pos) {
+            // do nothing
+        } else if (changed) {
+            if (!sep) {
+                sep = document.createElement("hr");
+                sep.className = "dropmark";
+                if (group.nodeName === "TBODY") {
+                    make_tr_dropmark();
+                }
+            }
+            group.insertBefore(sep, pos);
+        } else if (sep) {
+            sep.remove();
+            posy0 = null; // recalculate bounds now that separator’s gone
+            sep = null;
+        }
+        toggleClass(draggable, "drag-would-move", changed);
+        toggleClass(draggable, "drag-would-keep", !changed);
+    }
+    function drop() {
+        if (contained) {
+            changed && group.insertBefore(draggable, sep);
+            sep && sep.remove();
+            sep = null;
+            callback && callback(draggable, group, changed);
+        }
+    }
+    function dragend() {
+        sep && sep.remove();
+        removeClass(draggable, "dragging");
+        removeClass(group, "drag-active");
+        removeClass(draggable, "drag-would-move");
+        removeClass(draggable, "drag-would-keep");
+        window.removeEventListener("dragover", dragover);
+        draghandle.removeEventListener("dragend", dragend);
+        group.removeEventListener("drop", drop);
+        group.removeEventListener("dragenter", dragenter);
+        group.removeEventListener("dragleave", dragenter);
+        window.removeEventListener("scroll", scroll);
+        window.removeEventListener("resize", scroll);
+    }
+    function dragenter(evt) {
+        var delta = evt.type === "dragenter" ? 1 : -1;
+        contained += delta;
+        if (contained === 0) {
+            dragover(evt);
+        }
+        evt.preventDefault();
+    }
+    function scroll() {
+        posy0 = posy1 = null;
+    }
+    return {
+        start: function (evt) {
+            var g = draggable.getBoundingClientRect();
+            evt.dataTransfer.setDragImage(draggable, evt.clientX - g.left, evt.clientY - g.top);
+            evt.dataTransfer.effectAllowed = "move";
+            addClass(draggable, "dragging");
+            addClass(group, "drag-active");
+            window.addEventListener("dragover", dragover);
+            draghandle.addEventListener("dragend", dragend);
+            group.addEventListener("drop", drop);
+            group.addEventListener("dragenter", dragenter);
+            group.addEventListener("dragleave", dragenter);
+            window.addEventListener("scroll", scroll);
+            window.addEventListener("resize", scroll);
+        }
+    };
+};
+})();
 
 
 // hoturl
@@ -1054,23 +1266,28 @@ function hoturl_add(url, component) {
     return url + (url.indexOf("?") < 0 ? "?" : "&") + component;
 }
 
-function hoturl_remove(url, component) {
-    var hash = url.indexOf("#"), pos = url.indexOf("?");
+function hoturl_set(url, component, value) {
+    var hash = url.indexOf("#"), question = url.indexOf("?"), pos = question;
+    hash = hash < 0 ? url.length : hash;
     component += "=";
-    while (pos >= 0 && (pos = url.indexOf(component, pos)) > 0 && (hash < 0 || pos < hash)) {
-        if (url.charAt(pos - 1) === "?" || url.charAt(pos - 1) === ";" || url.charAt(pos - 1) === "&") {
-            var amp = url.indexOf("&", pos), semi = url.indexOf(";", pos),
-                stop = Math.min(hash < 0 ? url.length : hash,
-                                amp < 0 ? url.length : amp + 1,
-                                semi < 0 ? url.length : semi + 1);
-            if (stop === (hash < 0 ? url.length : hash))
-                --pos;
-            url = url.substring(0, pos) + url.substring(stop);
-            if (hash >= 0)
-                hash = url.indexOf("#", pos);
+    while (pos >= 0 && (pos = url.indexOf(component, pos)) > 0 && pos < hash) {
+        var ch = url.charAt(pos - 1);
+        if (ch === "?" || ch === ";" || ch === "&") {
+            var amp = url.indexOf("&", pos),
+                semi = url.indexOf(";", pos),
+                stop = Math.min(hash,
+                                amp < 0 ? url.length : amp,
+                                semi < 0 ? url.length : semi);
+            if (value != null)
+                url = url.substring(0, pos + component.length).concat(urlencode(value), url.substring(stop));
+            else
+                url = url.substring(0, pos - (stop === hash)) + url.substring(stop + (stop < hash));
+            return url;
         } else
             ++pos;
     }
+    if (value != null)
+        url = url.substring(0, hash).concat(question < 0 ? "?" : "&", component, urlencode(value), url.substring(hash));
     return url;
 }
 
@@ -1125,7 +1342,7 @@ function hoturl(page, options) {
             else if (k === "#")
                 anchor = "#" + v;
             else
-                xv.push(encodeURIComponent(k).concat("=", encodeURIComponent(v).replace(/%20/g, "+")));
+                xv.push(encodeURIComponent(k).concat("=", urlencode(v)));
         }
     }
 
@@ -1363,8 +1580,8 @@ return {
 function message_list_status(ml) {
     var i, status = 0;
     for (i = 0; i !== (ml || []).length; ++i) {
-        if (ml[i].status === -3 && status === 0) {
-            status = -3;
+        if (ml[i].status === -3 /*MessageSet::SUCCESS*/ && status === 0) {
+            status = -3 /*MessageSet::SUCCESS*/;
         } else if (ml[i].status >= 1 && ml[i].status > status) {
             status = ml[i].status;
         }
@@ -1375,7 +1592,7 @@ function message_list_status(ml) {
 function render_message_list(ml) {
     var status = message_list_status(ml),
         div = document.createElement("div");
-    if (status === -3) {
+    if (status === -3 /*MessageSet::SUCCESS*/) {
         div.className = "msg msg-success";
     } else if (status >= 2) {
         div.className = "msg msg-error";
@@ -1403,10 +1620,10 @@ function append_feedback_to(ul, mi) {
         if (ul.tagName !== "UL")
             throw new Error("bad append_feedback");
         sklass = "";
-        if (mi.status != null && mi.status >= -4 && mi.status <= 3)
-            sklass = ["warning-note", "success", "urgent-note", "note", "", "warning", "error", "error"][mi.status + 4];
+        if (mi.status != null && mi.status >= -4 /*MessageSet::MARKED_NOTE*/ && mi.status <= 3)
+            sklass = ["note", "success", "warning-note", "urgent-note", "", "warning", "error", "error"][mi.status + 4];
         div = document.createElement("div");
-        if (mi.status !== -5 || !ul.firstChild) {
+        if (mi.status !== -5 /*MessageSet::INFORM*/ || !ul.firstChild) {
             li = document.createElement("li");
             ul.appendChild(li);
             div.className = sklass ? "is-diagnostic format-inline is-" + sklass : "is-diagnostic format-inline";
@@ -1498,8 +1715,10 @@ function handle_ui(evt) {
         return;
     }
     var e = evt.target;
-    if ((e && (hasClass(e, "ui") || hasClass(e, "uin")))
-        || (this.tagName === "A" && hasClass(this, "ui"))) {
+    if ((e && hasClass(e, "uin"))
+        || (evt.type === "click"
+            && ((e && hasClass(e, "ui"))
+                || (this.nodeName === "A" && hasClass(this, "ui"))))) {
         evt.preventDefault();
     }
     var k = classList(this), cbs = [];
@@ -1526,7 +1745,7 @@ handle_ui.on = function (s, callback, priority) {
             dot = dot >= 0 ? dot : len;
         }
         if (dot < sp) {
-            type = s.substring(pos, dot);
+            type = pos === dot ? null : s.substring(pos, dot);
             className = s.substring(dot + 1, sp);
         } else {
             type = null;
@@ -1574,10 +1793,10 @@ return handle_ui;
 $(document).on("click", ".ui, .uic", handle_ui);
 $(document).on("change", ".uich", handle_ui);
 $(document).on("keydown", ".uikd", handle_ui);
+$(document).on("mousedown", ".uimd", handle_ui);
 $(document).on("input", ".uii", handle_ui);
 $(document).on("beforeinput", ".ui-beforeinput", handle_ui);
-$(document).on("fold", ".ui-fold", handle_ui);
-$(document).on("unfold", ".ui-unfold", handle_ui);
+$(document).on("foldtoggle", ".ui-fold", handle_ui);
 $(document).on("dragstart", ".ui-drag", handle_ui);
 
 
@@ -1614,17 +1833,21 @@ function input_default_value(elt) {
 }
 
 function input_set_default_value(elt, val) {
-    var cb = input_is_checkboxlike(elt);
+    var cb = input_is_checkboxlike(elt), curval;
     if (cb) {
         elt.removeAttribute("data-default-checked");
-        // set dirty checkedness flag:
-        elt.checked = elt.checked; // eslint-disable-line no-self-assign
+        curval = elt.checked;
         elt.defaultChecked = val != null && val != "";
-    } else {
-        elt.removeAttribute("data-default-value");
-        // set dirty value flag:
-        elt.value = elt.value; // eslint-disable-line no-self-assign
+        elt.checked = curval; // set dirty checkedness flag
+    } else if (elt.type !== "file") {
+        curval = elt.value;
+        if (elt.type === "hidden" && curval !== val) {
+            elt.setAttribute("data-default-value", val);
+        } else {
+            elt.removeAttribute("data-default-value");
+        }
         elt.defaultValue = val;
+        elt.value = curval; // set dirty value flag
     }
 }
 
@@ -1650,7 +1873,10 @@ function form_differs(form) {
     len = coll.length;
     for (i = 0; i !== len; ++i) {
         e = coll[i];
-        if (e.name && !hasClass(e, "ignore-diff") && input_differs(e))
+        if (e.name
+            && !hasClass(e, "ignore-diff")
+            && !e.disabled
+            && input_differs(e))
             return e;
     }
     return null;
@@ -1698,50 +1924,54 @@ $(function () {
     });
 });
 
-function focus_at(felt) {
-    felt.jquery && (felt = felt[0]);
+var focus_at = (function () {
+var ever_focused;
+return function (felt) {
+    if (felt.jquery)
+        felt = felt[0];
     felt.focus();
-    if (!felt.hotcrp_ever_focused) {
-        if (felt.select && hasClass(felt, "want-select")) {
+    if (!ever_focused && window.WeakMap)
+        ever_focused = new WeakMap;
+    if (ever_focused && !ever_focused.has(felt)) {
+        ever_focused.set(felt, true);
+        if (felt.select && hasClass(felt, "want-select"))
             felt.select();
-        } else if (felt.setSelectionRange) {
+        else if (felt.setSelectionRange) {
             try {
                 felt.setSelectionRange(felt.value.length, felt.value.length);
             } catch (e) { // ignore errors
             }
         }
-        felt.hotcrp_ever_focused = true;
     }
-}
+};
+})();
 
-function focus_within(elt, subfocus_selector) {
+function focus_within(elt, subfocus_selector, always) {
     var $wf = $(elt).find(".want-focus");
     if (subfocus_selector)
         $wf = $wf.filter(subfocus_selector);
-    if ($wf.length == 1)
-        focus_at($wf[0]);
-    return $wf.length == 1;
-}
-
-function refocus_within(elt) {
-    var focused = document.activeElement;
-    if (focused && focused.tagName !== "A" && !$(focused).is(":visible")) {
-        while (focused && focused !== elt)
-            focused = focused.parentElement;
-        if (focused) {
-            var focusable = $(elt).find("input, select, textarea, a, button").filter(":visible").first();
-            focusable.length ? focusable.focus() : $(document.activeElement).blur();
-        }
+    if ($wf.length !== 1 && always) {
+        $wf = [];
+        $(elt).find("a, input, select, textarea, button").each(function () {
+            if ((this.tagName === "A" || !this.disabled)
+                && (!subfocus_selector || this.matches(subfocus_selector))) {
+                $wf.push(this);
+                return false;
+            }
+        })
     }
+    if ($wf.length === 1)
+        focus_at($wf[0]);
+    return $wf.length === 1;
 }
 
 
 // rangeclick
 handle_ui.on("js-range-click", function (evt) {
-    var $f = $(this.form),
-        rangeclick_state = $f[0].jsRangeClick || {},
+    var f = this.form,
+        rangeclick_state = f.jsRangeClick || {},
         kind = this.getAttribute("data-range-type") || this.name;
-    $f[0].jsRangeClick = rangeclick_state;
+    f.jsRangeClick = rangeclick_state;
 
     var key = false;
     if (evt.type === "keydown" && !event_modkey(evt))
@@ -1752,13 +1982,13 @@ handle_ui.on("js-range-click", function (evt) {
         return;
 
     // find checkboxes and groups of this type
-    var cbs = [], cbgs = [];
-    $f.find("input.js-range-click").each(function () {
+    var cbs = [], cbisg = [], cbgs = [], x;
+    $(f).find("input.js-range-click").each(function () {
         var tkind = this.getAttribute("data-range-type") || this.name;
         if (kind === tkind) {
             cbs.push(this);
-            if (hasClass(this, "is-range-group"))
-                cbgs.push(this);
+            cbisg.push((x = hasClass(this, "is-range-group")));
+            x && cbgs.push(this);
         }
     });
 
@@ -1781,8 +2011,15 @@ handle_ui.on("js-range-click", function (evt) {
         return;
     }
 
+    function range_group_match(e, g) {
+        var eg;
+        return !g
+            || (eg = e.getAttribute("data-range-group")) === g
+            || (eg && eg.length > g.length && eg.split(" ").includes(g));
+    }
+
     // handle click
-    var group = false, single_group = false, j;
+    var group = false, single_clicked = false, j;
     if (evt.type === "click") {
         rangeclick_state.__clicking__ = true;
 
@@ -1803,16 +2040,15 @@ handle_ui.on("js-range-click", function (evt) {
             } else {
                 i = 1;
                 j = 0;
-                single_group = this.getAttribute("data-range-group");
+                single_clicked = this;
             }
         }
 
-        while (i <= j) {
-            if (cbs[i].checked !== this.checked
-                && !hasClass(cbs[i], "is-range-group")
-                && (!group || cbs[i].getAttribute("data-range-group") === group))
+        for (; i <= j; ++i) {
+            if (!cbisg[i]
+                && cbs[i].checked !== this.checked
+                && range_group_match(cbs[i], group))
                 $(cbs[i]).trigger("click");
-            ++i;
         }
 
         delete rangeclick_state.__clicking__;
@@ -1823,13 +2059,12 @@ handle_ui.on("js-range-click", function (evt) {
     // update groups
     for (j = 0; j !== cbgs.length; ++j) {
         group = cbgs[j].getAttribute("data-range-group");
-        if (single_group && group !== single_group)
+        if (single_clicked && !range_group_match(single_clicked, group))
             continue;
 
         var state = null;
         for (i = 0; i !== cbs.length; ++i) {
-            if (cbs[i].getAttribute("data-range-group") === group
-                && !hasClass(cbs[i], "is-range-group")) {
+            if (!cbisg[i] && range_group_match(cbs[i], group)) {
                 if (state === null)
                     state = cbs[i].checked;
                 else if (state !== cbs[i].checked) {
@@ -1910,7 +2145,13 @@ return function (content, bubopt) {
     var nearpos = null, dirspec = bubopt.anchor, dir = null,
         color = bubopt.color ? " " + bubopt.color : "";
 
-    var bubdiv = $('<div class="bubble'.concat(color, '" style="margin:0"><div class="bubtail bubtail0', color, '" style="width:0;height:0"></div><div class="bubcontent"></div><div class="bubtail bubtail1', color, '" style="width:0;height:0"></div></div>'))[0];
+    var bubdiv = classe("div", "bubble" + color,
+        classe("div", "bubtail bubtail0" + color),
+        classe("div", "bubcontent"),
+        classe("div", "bubtail bubtail1" + color));
+    bubdiv.setAttribute("style", "margin:0");
+    bubdiv.firstChild.setAttribute("style", "width:0;height:0");
+    bubdiv.lastChild.setAttribute("style", "width:0;height:0");
     document.body.appendChild(bubdiv);
     if (bubopt["pointer-events"])
         $(bubdiv).css({"pointer-events": bubopt["pointer-events"]});
@@ -2117,8 +2358,8 @@ return function (content, bubopt) {
                 y = nearpos.top - sizes.bottom - bpos.height - sizes[1] - 1;
         }
 
-        bubdiv.style.left = roundpixel(x) + "px";
-        bubdiv.style.top = roundpixel(y) + "px";
+        bubdiv.style.left = roundpixel(x - window.scrollX) + "px";
+        bubdiv.style.top = roundpixel(y - window.scrollY) + "px";
         bubdiv.style.visibility = "visible";
     }
 
@@ -2222,14 +2463,14 @@ return function (content, bubopt) {
 
 
 var global_tooltip;
-var tooltip = (function ($) {
+hotcrp.tooltip = (function ($) {
 var builders = {};
 
 function prepare_info(elt, info) {
     var xinfo = elt.getAttribute("data-tooltip-info");
     if (xinfo) {
         if (typeof xinfo === "string" && xinfo.charAt(0) === "{")
-            xinfo = parse_json(xinfo);
+            xinfo = JSON.parse(xinfo);
         else if (typeof xinfo === "string")
             xinfo = {builder: xinfo};
         info = $.extend(xinfo, info);
@@ -2297,7 +2538,7 @@ function show_tooltip(info) {
                 && !info.done) {
                 tt = tx;
             } else {
-                tx && tx.erase();
+                tx && tx.close();
                 $self.data("tooltipState", tt);
                 show_bub();
                 global_tooltip = tt;
@@ -2318,7 +2559,8 @@ function show_tooltip(info) {
                 to = setTimeout(erase, delay);
             return tt;
         },
-        erase: erase,
+        close: erase,
+        erase: erase, /* XXX backward compat */
         _element: $self[0],
         html: function (new_content) {
             if (new_content === undefined) {
@@ -2360,10 +2602,11 @@ function tooltip() {
     else
         $(this).hover(ttenter, ttleave);
 }
-tooltip.erase = function () {
-    var tt = this === tooltip ? global_tooltip : $(this).data("tooltipState");
-    tt && tt.erase();
+tooltip.close = function (e) {
+    var tt = e ? $(e).data("tooltipState") : global_tooltip;
+    tt && tt.close();
 };
+tooltip.erase = tooltip.close; /* XXX backward compat */
 tooltip.add_builder = function (name, f) {
     builders[name] = f;
 };
@@ -2432,20 +2675,23 @@ HtmlCollector.prototype.clear = function () {
     this.html = "";
     return this;
 };
-HtmlCollector.prototype.next_htctl_id = (function () {
+HtmlCollector.prototype.next_input_id = (function () {
 var id = 1;
 return function () {
-    while (document.getElementById("htctl" + id))
-        ++id;
-    ++id;
-    return "htctl" + (id - 1);
+    var s;
+    do {
+        s = "k-" + id++;
+    } while (document.getElementById(s));
+    return s;
 };
 })();
 
 
 // popup dialogs
 function popup_skeleton(options) {
-    var hc = new HtmlCollector, $d = null;
+    var hc = new HtmlCollector,
+        $d = null,
+        prior_focus = null;
     options = options || {};
     var near = options.near || options.anchor;
     hc.push('<div class="modal hidden" role="dialog"><div class="modal-dialog'.concat(
@@ -2483,11 +2729,18 @@ function popup_skeleton(options) {
         return $d;
     }
     function close() {
-        tooltip.erase();
+        removeClass(document.body, "modal-open");
+        if (document.activeElement
+            && $d[0].contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
+        hotcrp.tooltip.close();
         $d.find("textarea, input").unautogrow();
         $d.trigger("closedialog");
         $d.remove();
-        removeClass(document.body, "modal-open");
+        if (prior_focus) {
+            prior_focus.focus({preventScroll: true});
+        }
     }
     function show() {
         $d = $(hc.render()).appendTo(document.body).awaken();
@@ -2498,6 +2751,7 @@ function popup_skeleton(options) {
         $d.on("keydown", function (evt) {
             if (event_modkey(evt) === 0 && event_key(evt) === "Escape") {
                 close();
+                evt.preventDefault();
             }
         });
         if (options.action) {
@@ -2525,7 +2779,13 @@ function popup_skeleton(options) {
             show();
         }
         if (visible !== false) {
+            var e = document.activeElement;
             popup_near($d, near || window);
+            if (e && document.activeElement !== e) {
+                prior_focus = e;
+            }
+            hotcrp.tooltip.close();
+            // XXX also close down suggestions
         }
         return $d;
     };
@@ -2533,7 +2793,7 @@ function popup_skeleton(options) {
 }
 
 function popup_near(elt, near) {
-    tooltip.erase();
+    hotcrp.tooltip.close();
     if (elt.jquery)
         elt = elt[0];
     while (!hasClass(elt, "modal-dialog"))
@@ -2632,8 +2892,9 @@ handle_ui.on("js-mark-submit", function () {
 
 
 // initialization
-var hotcrp_deadlines = (function ($) {
-var dl, dlname, dltime, reload_timeout, reload_nerrors = 0, redisplay_timeout;
+(function ($) {
+var dl, dlname, dltime, redisplay_timeout,
+    reload_outstanding = 0, reload_nerrors = 0, reload_count = 0;
 
 // deadline display
 function checkdl(now, endtime, ingrace) {
@@ -2651,7 +2912,7 @@ function display_main(is_initial) {
 
     if (!is_initial
         && Math.abs(browser_now - dl.now) >= 300000
-        && (x = $$("msg-clock-drift"))) {
+        && (x = $$("p-clock-drift"))) {
         removeClass(x, "hidden");
         x.innerHTML = '<div class="msg msg-warning">The HotCRP server’s clock is more than 5 minutes off from your computer’s clock. If your computer’s clock is correct, you should update the server’s clock.</div>';
     }
@@ -2659,9 +2920,7 @@ function display_main(is_initial) {
     // See also the version in `Conf`
     dlname = "";
     dltime = 0;
-    if (!dl.sub)
-        log_jserror("bad dl " + JSON.stringify(dl));
-    if (dl.sub.open) {
+    if (dl.sub && dl.sub.open) {
         if (checkdl(now, +dl.sub.reg, dl.sub.reg_ingrace))
             dlname = "Registration";
         else if (checkdl(now, +dl.sub.update, dl.sub.update_ingrace))
@@ -2680,7 +2939,7 @@ function display_main(is_initial) {
     if (dltime && dltime - now > 2678400 /* 31 days */)
         dlname = null;
 
-    elt = $$("header-deadline");
+    elt = $$("h-deadline");
     if (dlname) {
         var impending = !dltime || dltime - now < 180.5,
             s = '<a href="' + hoturl_html("deadlines");
@@ -2694,17 +2953,20 @@ function display_main(is_initial) {
         if (impending)
             s = '<span class="impending">' + s + '</span>';
         if (!elt) {
-            var hdrelt = $$("header-right"), divelt, sepelt;
+            var hdrelt = $$("h-right"), divelt, sepelt;
             if (!hdrelt)
                 return;
             divelt = document.createElement("div");
             divelt.className = "d-inline-block";
             elt = document.createElement("span");
-            elt.id = "header-deadline";
-            sepelt = document.createElement("span");
-            sepelt.className = "barsep ml-1 mr-1";
-            sepelt.textContent = "·";
-            divelt.append(elt, sepelt);
+            elt.id = "h-deadline";
+            divelt.appendChild(elt);
+            if (hdrelt.firstChild) {
+                sepelt = document.createElement("span");
+                sepelt.className = "barsep ml-1 mr-1";
+                sepelt.textContent = "·";
+                divelt.append(sepelt);
+            }
             hdrelt.insertBefore(divelt, hdrelt.firstChild);
         }
         elt.innerHTML = s;
@@ -2728,25 +2990,27 @@ function redisplay_main() {
 
 
 // tracker
-var had_tracker_at = 0, had_tracker_display = false, last_tracker_html,
+var ever_tracker_display = false, last_tracker_html,
     tracker_has_format, tracker_timer, tracker_refresher,
     tracker_configured = false;
 
-function find_tracker(trackerid) {
+function tracker_find(trackerid) {
     if (dl.tracker && dl.tracker.ts) {
-        for (var i = 0; i !== dl.tracker.ts.length; ++i)
+        for (var i = 0; i !== dl.tracker.ts.length; ++i) {
             if (dl.tracker.ts[i].trackerid === trackerid)
                 return dl.tracker.ts[i];
+        }
         return null;
-    } else if (dl.tracker && dl.tracker.trackerid === trackerid)
+    } else if (dl.tracker && dl.tracker.trackerid === trackerid) {
         return dl.tracker;
-    else
+    } else {
         return null;
+    }
 }
 
-function analyze_tracker() {
+function tracker_status() {
     var ts = wstorage.site_json(true, "hotcrp-tracking"), tr;
-    if (ts && (tr = find_tracker(ts[1]))) {
+    if (ts && (tr = tracker_find(ts[1]))) {
         dl.tracker_here = ts[1];
         tr.tracker_here = true;
         if (!ts[2] && tr.start_at) {
@@ -2771,7 +3035,7 @@ function tracker_show_elapsed() {
     var now = now_sec(), max_delta_ms = 0;
     $(".tracker-timer").each(function () {
         var tre = this.closest(".has-tracker"),
-            tr = find_tracker(+tre.getAttribute("data-trackerid")),
+            tr = tracker_find(+tre.getAttribute("data-trackerid")),
             t = "";
         if (tr && tr.position_at) {
             var delta = now - (tr.position_at + dl.load - dl.now);
@@ -2802,7 +3066,7 @@ function tracker_paper_columns(tr, idx, wwidth) {
             title = title.replace(/^(\S+\s+\S+\s+\S+).*$/, "$1").substring(0, 50) + "…";
         else if (wwidth <= 768 && title.length > 50)
             title = title.replace(/^(\S+\s+\S+\s+\S+\s+\S+\s+\S+).*$/, "$1").substring(0, 75) + "…";
-        x.push('<a class="tracker-title q'.concat(f, '" href="', url, '">', escape_html(title), '</a>'));
+        x.push('<a class="tracker-title q'.concat(f, '" href="', escape_html(url), '">', escape_html(title), '</a>'));
         if (paper.format)
             tracker_has_format = true;
     }
@@ -2816,16 +3080,23 @@ function tracker_html(tr) {
     var t;
     if (wstorage.site(true, "hotcrp-tracking-hide-" + tr.trackerid))
         return "";
-    t = '<div class="has-tracker tracker-holder tracker-'
-        + (tr.papers && tr.papers[tr.paper_offset].pid == siteinfo.paperid ? "match" : "nomatch")
-        + (tr.tracker_here ? " tracker-active" : "");
+    t = '<div class="has-tracker tracker-holder';
+    if (tr.papers && tr.papers[tr.paper_offset].pid == siteinfo.paperid)
+        t += ' tracker-match';
+    else
+        t += ' tracker-nomatch';
+    if (tr.tracker_here)
+        t += ' tracker-active';
+    if (tr.visibility === "+none"
+        || tr.global_visibility === "+none")
+        t += ' tracker-adminonly';
     if (tr.listinfo || tr.listid)
         t += ' has-hotlist" data-hotlist="' + escape_html(tr.listinfo || tr.listid);
     t += '" data-trackerid="' + tr.trackerid + '">';
     var logo = escape_html(tr.logo || "☞");
     var logo_class = logo === "☞" ? "tracker-logo tracker-logo-fist" : "tracker-logo";
     if (tr.allow_administer)
-        t += '<a class="ui qo js-tracker need-tooltip '.concat(logo_class, '" aria-label="Tracker settings and status" href="">', logo, '</a>');
+        t += '<button class="qo ui js-tracker need-tooltip '.concat(logo_class, '" aria-label="Tracker settings and status">', logo, '</button>');
     else
         t += '<div class="'.concat(logo_class, '">', logo, '</div>');
     var rows = [], i, wwidth = $(window).width();
@@ -2848,7 +3119,7 @@ function tracker_html(tr) {
             if (tr.position_at)
                 t += '<span class="tracker-timer" data-trackerid="' + tr.trackerid + '"></span>';
             if (tr.allow_administer)
-                t += '<a class="ui js-tracker-stop closebtn need-tooltip" href="" aria-label="Stop this tracker">x</a>';
+                t += '<button type="button" class="ui js-tracker-stop qo btn-x need-tooltip ml-2" aria-label="Stop this tracker"></button>';
             t += '</td>';
         }
         t += '</tr>';
@@ -2857,8 +3128,9 @@ function tracker_html(tr) {
 }
 
 function display_tracker() {
-    var mne = $$("tracker"), mnspace = $$("tracker-space"),
-        mnpl = $("nav.pslcard-nav")[0], t, i, e;
+    var mne = $$("p-tracker"),
+        moffsets = document.querySelectorAll(".need-tracker-offset"),
+        t, i, e;
 
     // tracker button
     if ((e = $$("tracker-connect-btn"))) {
@@ -2869,66 +3141,66 @@ function display_tracker() {
     }
 
     // tracker display management
-    if (dl.tracker)
-        had_tracker_at = now_sec();
-    else
+    if (!dl.tracker) {
         wstorage.site(true, "hotcrp-tracking", null);
+    }
     if (!dl.tracker
         || (dl.tracker.ts && dl.tracker.ts.length === 0)
         || hasClass(document.body, "hide-tracker")) {
         if (mne) {
             if (global_tooltip
                 && mne.contains(global_tooltip.near())) {
-                global_tooltip.erase();
+                global_tooltip.close();
             }
             mne.parentNode.removeChild(mne);
         }
-        if (mnspace)
-            mnspace.parentNode.removeChild(mnspace);
-        if (mnpl)
-            mnpl.style.top = null;
+        for (i = 0; i !== moffsets.length; ++i) {
+            moffsets[i].style.top = null;
+        }
         removeClass(document.body, "has-tracker");
         return;
     }
 
     // tracker display
-    if (!mnspace) {
-        mnspace = document.createElement("div");
-        mnspace.id = "tracker-space";
-        document.body.insertBefore(mnspace, document.body.firstChild);
-    }
     if (!mne) {
         mne = document.createElement("div");
-        mne.id = "tracker";
+        mne.id = "p-tracker";
         document.body.insertBefore(mne, document.body.firstChild);
         last_tracker_html = null;
     }
-    if (!had_tracker_display) {
+    if (!ever_tracker_display) {
         $(window).on("resize", display_tracker);
-        had_tracker_display = true;
+        $(display_tracker);
+        ever_tracker_display = true;
     }
     addClass(document.body, "has-tracker");
 
     tracker_has_format = false;
     if (dl.tracker.ts) {
         t = "";
-        for (i = 0; i !== dl.tracker.ts.length; ++i)
+        for (i = 0; i !== dl.tracker.ts.length; ++i) {
             t += tracker_html(dl.tracker.ts[i]);
-    } else
+        }
+    } else {
         t = tracker_html(dl.tracker);
+    }
     if (t !== last_tracker_html) {
         if (global_tooltip
             && mne.contains(global_tooltip.near())) {
-            global_tooltip.erase();
+            global_tooltip.close();
         }
         last_tracker_html = mne.innerHTML = t;
         $(mne).awaken();
         if (tracker_has_format)
             render_text.on_page();
     }
-    mnspace.style.height = mne.offsetHeight + "px";
-    if (mnpl)
-        mnpl.style.top = (mne.offsetHeight + 104) + "px";
+    for (i = 0; i !== moffsets.length; ++i) {
+        e = moffsets[i];
+        if (!e.hasAttribute("data-tracker-offset")) {
+            e.setAttribute("data-tracker-offset", window.getComputedStyle(e).top);
+        }
+        e.style.top = (mne.offsetHeight + parseFloat(e.getAttribute("data-tracker-offset") || "0")) + "px";
+    }
     if (dl.tracker)
         tracker_show_elapsed();
 }
@@ -2936,16 +3208,15 @@ function display_tracker() {
 function tracker_refresh() {
     if (dl.tracker_here) {
         var ts = wstorage.site_json(true, "hotcrp-tracking"),
-            req = "track=" + ts[1], reqdata = {};
-        if (siteinfo.paperid)
-            req += "%20" + siteinfo.paperid + "&p=" + siteinfo.paperid;
+            param = {track: ts[1]};
+        if (siteinfo.paperid) {
+            param.track += " " + siteinfo.paperid;
+            param.p = siteinfo.paperid;
+        }
         if (ts[2])
-            req += "&tracker_start_at=" + ts[2];
-        if (ts[3])
-            reqdata["hotlist-info"] = ts[3];
-        $.post(hoturl("=api/track", req), reqdata, load_success);
-        if (!tracker_refresher)
-            tracker_refresher = setInterval(tracker_refresh, 25000);
+            param.tracker_start_at = ts[2];
+        streload(param, ts[3] ? {"hotlist-info": ts[3]} : {});
+        tracker_refresher = tracker_refresher || setInterval(tracker_refresh, 25000);
         wstorage.site(true, "hotcrp-tracking", ts);
     } else if (tracker_refresher) {
         clearInterval(tracker_refresher);
@@ -2962,30 +3233,46 @@ handle_ui.on("js-tracker", function (evt) {
             hc.push('<input type="hidden" name="tr' + trno + '-p" value="' + siteinfo.paperid + '">');
         if (tr.listinfo)
             hc.push('<input type="hidden" name="tr' + trno + '-listinfo" value="' + escape_html(tr.listinfo) + '">');
-        hc.push('<div class="entryi"><label for="htctl-tr' + trno + '-name">Name</label><div class="entry"><input id="htctl-tr' + trno + '-name" type="text" name="tr' + trno + '-name" size="30" class="want-focus need-autogrow" value="' + escape_html(tr.name || "") + (tr.is_new ? '" placeholder="New tracker' : '" placeholder="Unnamed') + '"></div></div>');
-        var vis = tr.visibility || "", vistype = vis === "" ? "" : vis.charAt(0);
-        hc.push('<div class="entryi has-fold fold' + (vistype === "" ? "c" : "o") + '" data-fold-values="+ -"><label for="htctl-tr' + trno + '-vistype">PC visibility</label><div class="entry">', '</div></div>');
-        hc.push('<span class="select"><select id="htctl-tr' + trno + '-vistype" name="tr' + trno + '-vistype" class="uich js-foldup" data-default-value="' + vistype + '">', '</select></span>');
-        var vismap = {"": "Whole PC", "+": "PC members with tag", "-": "PC members without tag"};
-        for (var i in vismap)
-            hc.push('<option value="' + i + '"' + (i === vistype ? " selected" : "") + '>' + vismap[i] + '</option>');
+        hc.push('<div class="entryi"><label for="k-tr' + trno + '-name">Name</label><div class="entry"><input id="k-tr' + trno + '-name" type="text" name="tr' + trno + '-name" size="30" class="want-focus need-autogrow" value="' + escape_html(tr.name || "") + (tr.is_new ? '" placeholder="New tracker' : '" placeholder="Unnamed') + '"></div></div>');
+        var vis = tr.visibility || "", vistype;
+        if (vis === "+none" || vis === "none") {
+            vistype = "none";
+            vis = "";
+        } else if (vis !== "") {
+            vistype = vis.charAt(0);
+        } else {
+            vistype = "";
+        }
+        hc.push('<div class="entryi has-fold fold' + (vistype === "+" || vistype === "-" ? "o" : "c") + '" data-fold-values="+ -"><label for="k-tr' + trno + '-vistype">PC visibility</label><div class="entry">', '</div></div>');
+        hc.push('<span class="select"><select id="k-tr' + trno + '-vistype" name="tr' + trno + '-vistype" class="uich js-foldup" data-default-value="' + vistype + '">', '</select></span>');
+        var vismap = [["", "Whole PC"], ["+", "PC members with tag"], ["-", "PC members without tag"]];
+        if (hotcrp.status.is_admin) {
+            vismap.push(["none", "Administrators only"]);
+        }
+        var i, v, issel, isdisabled, gvis = (dl.tracker && dl.tracker.global_visibility) || "";
+        for (i = 0; i !== vismap.length; ++i) {
+            v = vismap[i];
+            issel = v[0] === vistype ? " selected" : "";
+            isdisabled = gvis === "+none" && v[0] !== "none" ? " disabled" : "";
+            hc.push('<option value="'.concat(v[0], '"', issel, isdisabled, '>', v[1], '</option>'));
+        }
         hc.pop();
         hc.push_pop('  <input type="text" name="tr' + trno + '-vis" value="' + escape_html(vis.substring(1)) + '" placeholder="(tag)" class="need-suggest need-autogrow pc-tags fx">');
         if (dl.tracker && (vis = dl.tracker.global_visibility)) {
-            hc.push('<div class="entryi"><label><a href="' + hoturl("settings", "group=tracks") + '" target="_blank">Global visibility</a></label><div class="entry">', '</div></div>');
+            hc.push('<div class="entryi"><label>Global visibility</label><div class="entry">', '</div></div>');
             if (vis === "+none")
                 hc.push('Administrators only');
             else if (vis.charAt(0) === "+")
                 hc.push('PC members with tag ' + vis.substring(1));
             else
                 hc.push('PC members without tag ' + vis.substring(1));
-            hc.push_pop('<div class="f-h">This setting restricts all trackers.</div>');
+            hc.push_pop('<div class="f-h">This <a href="' + escape_html(hoturl("settings", "group=tracks")) + '">setting</a> restricts all trackers.</div>');
         }
         hc.push('<div class="entryi"><label></label><div class="entry"><label class="checki"><input type="hidden" name="has_tr' + trno + '-hideconflicts" value="1"><input class="checkc" name="tr' + trno + '-hideconflicts" value="1" type="checkbox"' + (tr.hide_conflicts ? ' checked' : '') + '>Hide conflicted papers</label></div></div>');
         if (tr.start_at)
             hc.push('<div class="entryi"><label>Elapsed time</label><span class="trackerdialog-elapsed" data-start-at="' + tr.start_at + '"></span></div>');
         try {
-            var j = parse_json(tr.listinfo || "null"), ids, pos;
+            var j = JSON.parse(tr.listinfo || "null"), ids, pos;
             if (j && j.ids && (ids = decode_session_list_ids(j.ids))) {
                 if (tr.papers
                     && tr.papers[tr.paper_offset]
@@ -3041,7 +3328,7 @@ handle_ui.on("js-tracker", function (evt) {
                     if (i !== "new")
                         wstorage.site(true, "hotcrp-tracking-hide-" + i, hiding[i] ? 1 : null);
                 tracker_configured = true;
-                reload();
+                streload();
             } else {
                 if (!$d && why === "new") {
                     start();
@@ -3084,7 +3371,7 @@ handle_ui.on("js-tracker", function (evt) {
         $d.find("form").submit();
     }
     function start() {
-        var hc = popup_skeleton({minWidth: "38rem"});
+        var hc = popup_skeleton({className: "modal-dialog-w40"});
         hc.push('<h2>Meeting tracker</h2>');
         var trackers, nshown = 0;
         if (!dl.tracker) {
@@ -3106,16 +3393,16 @@ handle_ui.on("js-tracker", function (evt) {
             if (!hotcrp_status.tracker_here) {
                 hc.push('<div class="lg"><button type="button" name="new">Start new tracker</button></div>');
             } else {
-                hc.push('<div class="lg"><button type="button" class="need-tooltip btn-disabled" tabindex="-1" aria-label="This browser tab is already running a tracker.">Start new tracker</button></div>');
+                hc.push('<div class="lg"><button type="button" class="need-tooltip disabled" tabindex="-1" aria-label="This browser tab is already running a tracker.">Start new tracker</button></div>');
             }
         } else {
-            hc.push('<div class="lg"><button type="button" class="need-tooltip btn-disabled" tabindex="-1" aria-label="To start a new tracker, open a tab on a submission page.">Start new tracker</button></div>')
+            hc.push('<div class="lg"><button type="button" class="need-tooltip disabled" tabindex="-1" aria-label="To start a new tracker, open a tab on a submission page.">Start new tracker</button></div>')
         }
         hc.push_actions();
         hc.push('<button type="submit" name="save" class="btn-primary">Save changes</button><button type="button" name="cancel">Cancel</button>');
         if (nshown) {
             hc.push('<button type="button" name="stopall" class="btn-danger float-left">Stop all</button>');
-            hc.push('<a class="btn float-left" target="_blank" href="' + hoturl("buzzer") + '">Tracker status page</a>');
+            hc.push('<a class="btn float-left" target="_blank" rel="noopener" href="' + hoturl("buzzer") + '">Tracker status page</a>');
         }
         $d = hc.show();
         show_elapsed();
@@ -3140,7 +3427,7 @@ handle_ui.on("js-tracker", function (evt) {
 
 function tracker_configure_success() {
     if (dl.tracker_here) {
-        var visibility = find_tracker(dl.tracker_here).visibility || null;
+        var visibility = tracker_find(dl.tracker_here).visibility || null;
         wstorage.site(false, "hotcrp-tracking-visibility", visibility);
     }
     tracker_configured = false;
@@ -3151,159 +3438,211 @@ handle_ui.on("js-tracker-stop", function (evt) {
     if (e && e.hasAttribute("data-trackerid"))
         $.post(hoturl("=api/trackerconfig"),
             {"tr1-id": e.getAttribute("data-trackerid"), "tr1-stop": 1},
-            reload);
+            function () { streload(); });
 });
 
 
-// Comet tracker
-var comet_sent_at, comet_stop_until, comet_nerrors = 0, comet_nsuccess = 0,
-    comet_long_timeout = 260000;
+// Comet and storage for tracker
+var trmicrotask = 0, trexpire = null, my_uuid = "x",
+    comet_outstanding = 0, comet_stop_until = 0,
+    comet_nerrors = 0, comet_nsuccess = 0, comet_long_timeout = 260000;
 
-var comet_store = (function () {
-    var stored_at, refresh_timeout, restore_status_timeout;
-    if (!wstorage())
-        return function () { return false; };
-
-    function make_site_status(v) {
-        var x = v && parse_json(v);
-        if (!x || typeof x !== "object")
-            x = {};
-        if (!x.updated_at
-            || x.updated_at + 10 < now_sec()
-            || (dl && x.tracker_status != dl.tracker_status && x.at < dl.now))
-            x.expired = true;
-        else if (dl && x.tracker_status != dl.tracker_status)
-            x.fresh = true;
-        else if (x.at == stored_at)
-            x.owned = true;
-        else
-            x.same = true;
+var trevent, trevent$;
+if (wstorage()) {
+    trevent = function () {
+        var x = wstorage.site_json(false, "hotcrp-trevent");
+        if (!x || typeof x !== "object" || typeof x.eventid !== "number")
+            x = {eventid: 0};
         return x;
+    };
+} else {
+    trevent$ = {eventid: 0};
+    trevent = function () {
+        return trevent$;
+    };
+}
+
+function trevent_store(x, prev_eventid, cancel) {
+    var tre = trevent(), now = now_sec();
+    if ((tre.eventid > x.eventid
+         && tre.expiry > now
+         && tre.eventid !== prev_eventid)
+        || (tre.eventid === x.eventid
+            && tre.long
+            && (tre.uuid !== my_uuid || (!x.long && !cancel))))
+        return false;
+    if (!cancel || tre.uuid === my_uuid) {
+        x.uuid = my_uuid;
+        trevent$ = x;
+        wstorage.site(false, "hotcrp-trevent", x);
     }
-    function site_status() {
-        return make_site_status(wstorage.site(false, "hotcrp-comet"));
-    }
-    function store_current_status() {
-        stored_at = dl.now;
-        wstorage.site(false, "hotcrp-comet", {
-            at: stored_at, tracker_status: dl.tracker_status, updated_at: now_sec()
-        });
-        if (!restore_status_timeout)
-            restore_status_timeout = setTimeout(restore_current_status, 5000);
-    }
-    function restore_current_status() {
-        restore_status_timeout = null;
-        if (comet_sent_at)
-            store_current_status();
+    trevent_react_soon();
+    return true;
+}
+
+function trevent_initialize_wstorage() {
+    my_uuid = (window.crypto && window.crypto.randomUUID && window.crypto.randomUUID())
+        || now_sec().toString().concat("/", Math.random(), "/", Math.random());
+    var tre = trevent();
+    if (tre.eventid > 0 && tre.expiry > now_sec()) {
+        trevent_react_soon();
     }
     $(window).on("storage", function (evt) {
-        var x, oevt = evt.originalEvent || evt;
-        if (dl && dl.tracker_site && oevt.key === "hotcrp-comet") {
-            x = make_site_status(oevt.newValue);
-            if (x.expired || x.fresh)
-                reload();
+        var xevt = evt.originalEvent || evt;
+        if (xevt.key === wstorage.site_key("hotcrp-trevent")) {
+            trevent_react_soon();
         }
+    }).on("unload", function () {
+        var eventid = dl.tracker_eventid || 0;
+        trevent_store({eventid: eventid, expiry: now_sec()}, eventid, true);
     });
-    function refresh() {
-        if (!s(0))
-            reload();
-    }
-    function s(action) {
-        var x = site_status();
-        if (action > 0 && (x.expired || x.owned))
-            store_current_status();
-        if (!action) {
-            clearTimeout(refresh_timeout);
-            refresh_timeout = null;
-            if (x.same)
-                refresh_timeout = setTimeout(refresh, 5000);
-            return !!x.same;
-        }
-        if (action < 0 && x.owned)
-            wstorage.site(false, "hotcrp-comet", null);
-    }
-    return s;
-})();
+}
 
-$(window).on("unload", function () { comet_store(-1); });
+function trevent_react_soon() {
+    if (trmicrotask === 0) {
+        trmicrotask = 1;
+        queueMicrotask(trevent_react);
+    }
+}
 
-function comet_tracker() {
-    var at = now_msec(),
+function trevent_react() {
+    trmicrotask = 0;
+    clearTimeout(trexpire);
+    trexpire = null;
+    var tre = trevent(), now = now_sec();
+
+    // no information or out-of-date information: reload now
+    if (!dl || (dl.tracker_eventid || 0) !== tre.eventid) {
+        streload();
+        return;
+    }
+
+    // expires in future: reload then
+    if (tre.expiry > now
+        && (!dl.tracker_site || tre.long || now < comet_stop_until)) {
+        trexpire = setTimeout(trevent_react, (tre.expiry - now) * 1000);
+        return;
+    }
+
+    // at this point, we have supposedly up-to-date events + expired cache
+
+    // no comet: reload now
+    if (!dl.tracker_site) {
+        // reserve next 0.5sec in local storage, but don’t reschedule µtask
+        ++trmicrotask;
+        trevent_store({eventid: dl.tracker_eventid || 0, expiry: now + 0.5}, tre.eventid);
+        --trmicrotask;
+        streload();
+        return;
+    }
+
+    // comet active or quiescent: don’t reload
+    if (comet_outstanding || now < comet_stop_until || !dl.tracker_recent)
+        return;
+
+    // localStorage is inherently racy -- no locking or compare-and-swap --
+    // so use a little randomness to discourage opening of multiple polls
+    // (alternative would be to use a SharedWorker)
+    comet_outstanding = now;
+    setTimeout(trevent_comet, 1 + Math.random() * 100, tre.eventid, now);
+}
+
+function trevent_comet(prev_eventid, start_at) {
+    // at this point, start a poll
+    var reserve_to = null, xhr = null,
         timeout = Math.floor((comet_nsuccess ? comet_long_timeout : 1000)
                              + Math.random() * 1000);
 
-    // correct tracker_site URL to be a full URL if necessary
-    if (dl.tracker_site && !/^(?:https?:|\/)/.test(dl.tracker_site))
-        dl.tracker_site = url_absolute(dl.tracker_site, hoturl_absolute_base());
-    if (dl.tracker_site && !/\/$/.test(dl.tracker_site))
-        dl.tracker_site += "/";
-
-    // exit early if already waiting, or another tab is waiting, or stopped
-    if (comet_sent_at || comet_store(0))
-        return true;
-    if (!dl.tracker_site || (comet_stop_until && comet_stop_until >= at))
+    function reserve() {
+        var now = now_sec();
+        if (trevent_store({
+                eventid: prev_eventid,
+                expiry: Math.min(now + 8, start_at + timeout),
+                long: true
+            }, prev_eventid)) {
+            reserve_to = setTimeout(reserve, 6000);
+            return true;
+        }
+        if (xhr)
+            xhr.abort();
+        else {
+            clearTimeout(trexpire);
+            trexpire = setTimeout(trevent_react, (trevent().expiry - now) * 1000);
+            comet_outstanding = 0;
+        }
         return false;
-
-    // make the request
-    comet_sent_at = at;
+    }
+    if (!reserve())
+        return;
 
     function success(data, status, xhr) {
-        var now = now_msec();
-        if (comet_sent_at != at)
+        if (comet_outstanding !== start_at)
             return;
-        comet_sent_at = null;
-        if (status == "success" && xhr.status == 200 && data && data.ok
-            && (dl.tracker_status == data.tracker_status
-                || !data.tracker_status_at
-                || !dl.tracker_status_at
-                || dl.tracker_status_at + 0.005 <= data.tracker_status_at)) {
+        var done_at = now_sec();
+        comet_outstanding = 0;
+        clearTimeout(reserve_to);
+        if (status == "success" && xhr.status == 200 && data && data.ok) {
             // successful status
             comet_nerrors = comet_stop_until = 0;
             ++comet_nsuccess;
-            reload();
-        } else if (now - at > 100000) {
+            trevent_store({
+                eventid: data.tracker_eventid,
+                expiry: done_at + 3000 + Math.random() * 1000
+            }, prev_eventid, true);
+            return;
+        }
+        if (done_at - start_at > 100) {
             // errors after long delays are likely timeouts -- nginx
             // or Chrome shut down the long poll. multiplicative decrease
             comet_long_timeout = Math.max(comet_long_timeout / 2, 30000);
-            comet_tracker();
-        } else if (++comet_nerrors < 3) {
-            setTimeout(comet_tracker, 128 << Math.min(comet_nerrors, 12));
-            comet_store(-1);
         } else {
-            comet_stop_until = now + 10000 * Math.min(comet_nerrors, 60);
-            reload();
+            comet_stop_until = done_at;
+            if (++comet_nerrors <= 4)
+                comet_stop_until += comet_nerrors / 4 - 0.1;
+            else
+                comet_stop_until += Math.min(comet_nerrors * comet_nerrors - 23, 600);
         }
+        trevent_store({eventid: prev_eventid, expiry: done_at}, prev_eventid, true);
     }
 
     function complete(xhr, status) {
         success(null, status, xhr);
     }
 
-    $.ajax(hoturl_add(dl.tracker_site + "poll",
-                      "conference=" + encodeURIComponent(hoturl_absolute_base())
-                      + "&poll=" + encodeURIComponent(dl.tracker_status)
-                      + "&tracker_status_at=" + encodeURIComponent(dl.tracker_status_at || 0)
-                      + "&timeout=" + timeout), {
-            method: "GET", timeout: timeout + 2000, success: success, complete: complete
-        });
-    return true;
+    // correct tracker_site URL to be a full URL if necessary
+    if (dl.tracker_site && !/^(?:https?:|\/)/.test(dl.tracker_site))
+        dl.tracker_site = url_absolute(dl.tracker_site, hoturl_absolute_base());
+    if (dl.tracker_site && !/\/$/.test(dl.tracker_site))
+        dl.tracker_site += "/";
+    var param = "conference=".concat(encodeURIComponent(hoturl_absolute_base()),
+            "&poll=", encodeURIComponent(prev_eventid),
+            "&timeout=", timeout);
+    if (my_uuid !== "x")
+        param += "&uuid=" + my_uuid;
+
+    // make request
+    //console.log(start_at + ": poll " + JSON.stringify(trevent()));
+    xhr = $.ajax(hoturl_add(dl.tracker_site + "poll", param), {
+        method: "GET", timeout: timeout + 2000, cache: false,
+        success: success, complete: complete
+    });
 }
 
 
 // deadline loading
-function load(dlx, is_initial) {
+function load(dlx, prev_eventid, is_initial) {
+    if (dl && dl.tracker_recent && dlx)
+        dlx.tracker_recent = true;
     if (dlx)
         window.hotcrp_status = window.hotcrp.status = dl = dlx;
     dl.load = dl.load || now_sec();
     dl.perm = dl.perm || {};
     dl.myperm = dl.perm[siteinfo.paperid] || {};
     dl.rev = dl.rev || {};
-    dl.tracker_status = dl.tracker_status || "off";
-    if (dl.tracker
-        || (dl.tracker_status_at && dl.load - dl.tracker_status_at < 259200)) {
-        analyze_tracker();
-        had_tracker_at = dl.load;
-    }
+    if (is_initial && wstorage())
+        trevent_initialize_wstorage();
+    if (dl.tracker_recent)
+        tracker_status();
     display_main(is_initial);
     $(window).trigger("hotcrpdeadlines", [dl]);
     for (var i in dl.p || {}) {
@@ -3312,67 +3651,70 @@ function load(dlx, is_initial) {
             $(window).trigger("hotcrptags", [dl.p[i]]);
         }
     }
-    if (had_tracker_at && (!is_initial || !dl.tracker_here))
+    if (dl.tracker_recent && (!is_initial || !dl.tracker_here))
         display_tracker();
-    if (had_tracker_at)
-        comet_store(1);
     if (!dl.tracker_here !== !tracker_refresher)
         tracker_refresh();
     if (tracker_configured)
         tracker_configure_success();
-    if (!reload_timeout) {
+    if (reload_outstanding === 0) {
         var t;
-        if (is_initial && $$("msg-clock-drift"))
-            t = 10;
-        else if (had_tracker_at && comet_tracker())
-            /* skip */;
-        else if (had_tracker_at && dl.load - had_tracker_at < 10800)
-            t = 10000;
+        if (is_initial && ($$("p-clock-drift") || dl.tracker_recent))
+            t = 0.01;
+        else if (dl.tracker_recent)
+            t = 7 + Math.random() * 1.5;
         else if (!dlname)
-            t = 1800000;
+            t = 1800;
         else if (Math.abs(dltime - dl.load) >= 900)
-            t = 300000;
+            t = 300;
         else if (Math.abs(dltime - dl.load) >= 120)
-            t = 90000;
+            t = 90;
         else
-            t = 45000;
-        if (t)
-            reload_timeout = setTimeout(reload, t);
+            t = 45;
+        trevent_store({
+            eventid: dl.tracker_eventid || 0,
+            expiry: dl.load + t
+        }, prev_eventid);
     }
 }
 
-function load_success(data) {
-    if (reload_timeout !== true)
-        clearTimeout(reload_timeout);
-    if (data && data.ok) {
-        reload_timeout = null;
-        reload_nerrors = 0;
-        load(data);
-    } else {
-        ++reload_nerrors;
-        reload_timeout = setTimeout(reload, 10000 * Math.min(reload_nerrors, 60));
-    }
-}
-
-function reload() {
-    if (reload_timeout === true) // reload outstanding
+function streload(trackparam, trackdata) {
+    if (!trackparam && reload_outstanding > 0)
         return;
-    clearTimeout(reload_timeout);
-    reload_timeout = true;
-    var options = hotcrp_deadlines.options || {};
-    if (hotcrp_deadlines)
-        options.p = siteinfo.paperid;
-    options.fn = "status";
-    $.ajax(hoturl("api", options), {
-        method: "GET", timeout: 30000, success: load_success
-    });
+    ++reload_outstanding;
+    ++reload_count;
+    var prev_eventid = trevent().eventid;
+    function success(data) {
+        --reload_outstanding;
+        if (data && data.ok) {
+            reload_nerrors = 0;
+            load(data, prev_eventid, false);
+        } else {
+            ++reload_nerrors;
+            setTimeout(trevent_react, 10000 * Math.min(reload_nerrors, 60));
+        }
+    }
+    if (trackparam) {
+        $.ajax(hoturl("=api/track", trackparam), {
+            method: "POST", data: trackdata, success: success
+        });
+    } else {
+        $.ajax(hoturl("api/status", siteinfo.paperid ? {p: siteinfo.paperid} : {}), {
+            method: "GET", timeout: 30000, success: success
+        });
+    }
 }
 
-return { load: load, tracker_show_elapsed: tracker_show_elapsed };
+hotcrp.init_deadlines = function (dl) {
+    load(dl, null, true);
+};
+
+hotcrp.tracker_show_elapsed = tracker_show_elapsed;
+
 })(jQuery);
 
 
-var hotcrp_load = (function ($) {
+hotcrp.onload = (function ($) {
     function append_span(e, fmt, d) {
         var span = document.createElement("span");
         span.textContent = strftime(fmt, d);
@@ -3419,11 +3761,11 @@ function fold_storage() {
     } else {
         removeClass(this, "need-fold-storage");
         var sn = this.getAttribute("data-fold-storage"), smap, k;
-        if (sn.charAt(0) === "-") { // XXX backward compat
+        if (sn.charAt(0) === "-") { // default is open, use storage to close
             sn = sn.substring(1);
         }
         if (sn.charAt(0) === "{" || sn.charAt(0) === "[") {
-            smap = parse_json(sn) || {};
+            smap = JSON.parse(sn) || {};
         } else {
             var m = this.className.match(/\bfold(\d*)[oc]\b/),
                 n = m[1] === "" ? 0 : +m[1];
@@ -3433,22 +3775,25 @@ function fold_storage() {
         sn = wstorage.json(true, "fold") || wstorage.json(false, "fold") || {};
         for (k in smap) {
             if (sn[smap[k]]) {
-                foldup.call(this, null, {f: false, n: +k});
+                foldup.call(this, null, {open: true, n: +k});
             } else if (sn[smap[k]] != null) {
-                foldup.call(this, null, {f: true, n: +k});
+                foldup.call(this, null, {open: false, n: +k});
             }
         }
     }
 }
 
 function fold_session_for(foldnum, type) {
-    var s = this.getAttribute("data-fold-" + type), flip = false;
+    var s = this.getAttribute("data-fold-" + type), p, flip = false;
+    if (s && (s.charAt(0) === "{" || s.charAt(0) === "[")) {
+        s = (JSON.parse(s) || {})[foldnum];
+    }
     if (s && s.charAt(0) === "-") {
         s = s.substring(1);
         flip = true;
     }
-    if (s && (s.charAt(0) === "{" || s.charAt(0) === "[")) {
-        s = (parse_json(s) || {})[foldnum];
+    if (s && (p = this.getAttribute("data-fold-" + type + "-prefix"))) {
+        s = p + s;
     }
     return s ? [s, flip] : null;
 }
@@ -3478,11 +3823,8 @@ function fold(elt, dofold, foldnum) {
     wasopen = hasClass(elt, opentxt);
     if (dofold == null || !dofold != wasopen) {
         // perform fold
-        if (wasopen) {
-            elt.className = elt.className.replace(opentxt, closetxt);
-        } else {
-            elt.className = elt.className.replace(closetxt, opentxt);
-        }
+        toggleClass(elt, opentxt, !wasopen);
+        toggleClass(elt, closetxt, wasopen);
 
         // check for session
         if ((s = fold_session_for.call(elt, foldnum, "storage"))) {
@@ -3501,11 +3843,14 @@ function fold(elt, dofold, foldnum) {
 }
 
 function foldup(evt, opts) {
-    var e = this, dofold = false, m, x;
+    var e = this, wantopen, m, x;
     if (typeof opts === "number") {
         opts = {n: opts};
     } else if (!opts) {
         opts = {};
+    }
+    if (!("open" in opts) && "f" in opts) {
+        opts.open = !opts.f;
     }
     if (this.tagName === "DIV"
         && evt
@@ -3520,13 +3865,13 @@ function foldup(evt, opts) {
             e = document.getElementById(m[1]);
         }
         opts.n = parseInt(m[2]) || 0;
-        if (!("f" in opts) && m[3] !== "") {
+        if (!("open" in opts) && m[3] !== "") {
             if (this.tagName === "INPUT"
                 && input_is_checkboxlike(this)
                 && (this.checked ? m[3] === "u" : m[3] === "U")) {
                 m[3] = "c";
             }
-            opts.f = m[3] === "c";
+            opts.open = m[3] !== "c";
         }
     }
     var foldname = "fold" + (opts.n || "");
@@ -3548,11 +3893,11 @@ function foldup(evt, opts) {
             }
         }
     }
-    if (!("f" in opts)
+    if (!("open" in opts)
         && (this.tagName === "INPUT" || this.tagName === "SELECT")) {
         var value = null;
         if (this.type === "checkbox") {
-            opts.f = !this.checked;
+            opts.open = this.checked;
         } else if (this.type === "radio") {
             if (!this.checked)
                 return true;
@@ -3562,17 +3907,18 @@ function foldup(evt, opts) {
         }
         if (value !== null) {
             var values = (e.getAttribute("data-" + foldname + "-values") || "").split(/\s+/);
-            opts.f = values.indexOf(value) < 0;
+            opts.open = values.indexOf(value) >= 0;
         }
     }
-    dofold = !hasClass(e, foldname + "c");
-    if (!("f" in opts) || !opts.f !== dofold) {
-        opts.f = dofold;
-        fold(e, dofold, opts.n || 0);
-        $(e).trigger($.Event(opts.f ? "fold" : "unfold", {which: opts}));
+    wantopen = hasClass(e, foldname + "c");
+    if (!("open" in opts) || !!opts.open === wantopen) {
+        opts.f = !wantopen; // XXX backward compat
+        opts.open = wantopen;
+        fold(e, !wantopen, opts.n || 0);
+        $(e).trigger($.Event("foldtoggle", {which: opts}));
     }
     if (this.hasAttribute("aria-expanded")) {
-        this.setAttribute("aria-expanded", dofold ? "false" : "true");
+        this.setAttribute("aria-expanded", wantopen ? "true" : "false");
     }
     if (evt
         && typeof evt === "object"
@@ -3584,17 +3930,89 @@ function foldup(evt, opts) {
 }
 
 handle_ui.on("js-foldup", foldup);
-handle_ui.on("unfold.js-unfold-focus", function (evt) {
-    if (!evt.which.nofocus)
-        focus_within(this, ".fx" + (evt.which.n || "") + " *");
+handle_ui.on("foldtoggle.js-fold-focus", function (evt) {
+    if (evt.which.nofocus)
+        return;
+    var ns = evt.which.n || "";
+    if (!hasClass(this, "fold".concat(ns, "c"))
+        && !hasClass(this, "fold".concat(ns, "o")))
+        return;
+    if (evt.which.open) {
+        if (!document.activeElement
+            || !this.contains(document.activeElement)
+            || !document.activeElement.offsetParent) {
+            focus_within(this, ".fx".concat(ns, " *"));
+        }
+    } else if (document.activeElement
+               && this.contains(document.activeElement)
+               && document.activeElement.closest(".fx" + ns)) {
+        focus_within(this, ":not(.fx".concat(ns, " *)"), true);
+    }
+    evt.which.nofocus = true;
 });
-handle_ui.on("fold.js-fold-focus", function (evt) {
-    if (!evt.which.nofocus)
-        focus_within(this, ".fn" + (evt.which.n || "") + " *");
-})
 $(function () {
-    $(".uich.js-foldup").each(function () { foldup.call(this, null, {nofocus: true}); });
+    $(".uich.js-foldup").each(function () {
+        foldup.call(this, null, {nofocus: true});
+    });
 });
+
+
+function svge() {
+    var e = document.createElementNS("http://www.w3.org/2000/svg", arguments[0]), i, t;
+    for (i = 1; i < arguments.length; ) {
+        t = arguments[i];
+        if (typeof t === "string") {
+            e.setAttribute(t, arguments[i + 1]);
+            i += 2;
+        } else {
+            e.append(t);
+            ++i;
+        }
+    }
+    return e;
+}
+
+function classe() {
+    var e = document.createElement(arguments[0]), i;
+    if (arguments[1])
+        e.className = arguments[1];
+    for (i = 2; i < arguments.length; ++i) {
+        e.append(arguments[i]);
+    }
+    return e;
+}
+
+function attre() {
+    var e = document.createElement(arguments[0]), attr, i;
+    if ((attr = arguments[1])) {
+        for (i in attr) {
+            if (i === "disabled") {
+                e.disabled = attr[i];
+            } else if (i === "class") {
+                e.className = attr[i];
+            } else {
+                e.setAttribute(i, attr[i]);
+            }
+        }
+    }
+    for (i = 2; i < arguments.length; ++i) {
+        e.append(arguments[i]);
+    }
+    return e;
+}
+
+
+function make_expander_element(foldnum) {
+    function mksvgp(d) {
+        var sv = svge("svg", "class", "licon", "width", "0.75em", "height", "0.75em", "viewBox", "0 0 16 16", "preserveAspectRatio", "none"),
+            p = svge("path", "d", d);
+        sv.appendChild(p);
+        return sv;
+    }
+    return classe("span", "expander",
+        classe("span", "in0 fx" + foldnum, mksvgp("M1 1L8 15L15 1z")),
+        classe("span", "in1 fn" + foldnum, mksvgp("M1 1L15 8L1 15z")));
+}
 
 
 // special-case folding for author table
@@ -3614,17 +4032,21 @@ handle_ui.on("js-aufoldup", function (evt) {
 });
 
 handle_ui.on("js-click-child", function (evt) {
-    var a = $(this).find("a")[0]
-        || $(this).find("input[type=checkbox], input[type=radio]")[0];
-    if (a && evt.target !== a && !a.disabled) {
+    if (evt.target.closest("a[href], input, select, textarea, button"))
+        return;
+    var a = this.querySelector("a[href], input[type=checkbox], input[type=radio]");
+    if (!a || a.disabled)
+        return;
+    if (evt.type === "click") {
         var newEvent = new MouseEvent("click", {
+            view: window, bubbles: true, cancelable: true,
             button: evt.button, buttons: evt.buttons,
             ctrlKey: evt.ctrlKey, shiftKey: evt.shiftKey,
             altKey: evt.altKey, metaKey: evt.metaKey
         });
         a.dispatchEvent(newEvent);
-        evt.preventDefault();
     }
+    evt.preventDefault();
 });
 
 
@@ -3656,16 +4078,16 @@ push_history_state.ever = false;
 // line links
 
 handle_ui.on("lla", function () {
-    var e = this.closest(".linelink");
-    var f = e.closest(".linelinks");
+    var e = this.closest(".linelink"),
+        f = e.closest(".linelinks");
     $(f).find(".linelink").removeClass("active");
     addClass(e, "active");
-    $(e).trigger("unfold", {f: false});
+    $(e).trigger($.Event("foldtoggle", {which: {open: true}}));
     focus_within(e, ".lld *");
 });
 
 $(function () {
-    $(".linelink.active").trigger("unfold", {f: false, linelink: true});
+    $(".linelink.active").trigger($.Event("foldtoggle", {which: {open: true, linelink: true}}));
 });
 
 
@@ -3673,10 +4095,12 @@ $(function () {
 
 handle_ui.on("tla", function () {
     var hash = this.href.replace(/^[^#]*#*/, "");
-    var e = document.getElementById("tla-" + (hash || "default"));
+    var e = $$(hash || "default");
     $(".is-tla, .tll, .papmode").removeClass("active");
+    $(".tll").removeClass("active").attr("aria-selected", "false");
     addClass(e, "active");
-    addClass(this.closest(".tll, .papmode"), "active");
+    $(this).closest(".papmode").addClass("active");
+    $(this).closest(".tll").addClass("active").attr("aria-selected", "true");
     push_history_state(this.href);
     focus_within(e);
 });
@@ -3716,14 +4140,15 @@ handle_ui.on("hashjump.js-hash", function (hashc, focus) {
 
     // look up destination element
     var hash = hashc[0] || "", m, e, p;
-    if (hash === "") {
-        e = document.getElementById("tla-default");
+    if (hash === "" || hash === "default") {
+        e = $$("default");
+        hash = ""
     } else {
-        e = document.getElementById("tla-" + hash) || document.getElementById(hash);
+        e = $$(hash);
         if (!e
             // check for trailing punctuation
             && (m = hash.match(/^([-_a-zA-Z0-9/]+)[\p{Pd}\p{Pe}\p{Pf}\p{Po}]$/u))
-            && (e = document.getElementById("tla-" + m[1]) || document.getElementById(m[1]))) {
+            && (e = $$(m[1]))) {
             hash = m[1];
             location.hash = "#" + hash;
         }
@@ -3731,15 +4156,17 @@ handle_ui.on("hashjump.js-hash", function (hashc, focus) {
 
     if (!e) {
         /* do nothing */
-    } else if (e.id.startsWith("tla-")) {
+    } else if (hasClass(e, "is-tla")) {
         // tabbed UI
         if (!hasClass(e, "active")) {
-            $(".is-tla, .tll, .papmode").removeClass("active");
+            $(".is-tla, .papmode").removeClass("active");
+            $(".tll").removeClass("active").attr("aria-selected", "false");
             addClass(e, "active");
             $(".tla").each(function () {
                 if ((hash === "" && this.href.indexOf("#") === -1)
                     || this.href.endsWith("#" + hash)) {
-                    addClass(this.closest(".tll, .papmode"), "active");
+                    $(this).closest(".papmode").addClass("active");
+                    $(this).closest(".tll").addClass("active").attr("aria-selected", "true");
                 }
             });
         }
@@ -3752,12 +4179,12 @@ handle_ui.on("hashjump.js-hash", function (hashc, focus) {
             || (pg.top <= eg.top && eg.top - pg.top <= wh * 0.75)) {
             $(".tla-highlight").removeClass("tla-highlight");
             window.scroll(0, pg.top - Math.max(wh > 300 ? 20 : 0, (wh - pg.height) * 0.25));
-            $(p).find("label").first().addClass("tla-highlight");
+            $(p).find("label, .field-title").first().addClass("tla-highlight");
             focus_at(e);
             return true;
         }
     } else if (hasClass(e, "need-anchor-unfold")) {
-        foldup.call(e, null, {f: false});
+        foldup.call(e, null, {open: true});
     }
 }, -1);
 
@@ -3779,7 +4206,8 @@ $(function () {
 // dropdown menus
 
 (function ($) {
-var is_ie = document.documentMode || window.attachEvent;
+var is_ie = document.documentMode || window.attachEvent, /* XXX remove support */
+    builders = {};
 
 if (is_ie) {
     $(function () {
@@ -3796,14 +4224,20 @@ function dropmenu_close() {
 
 handle_ui.on("click.js-dropmenu-open", function (evt) {
     var modal = $$("dropmenu-modal"), esummary = this, edetails, was_open;
-    if (esummary.tagName === "BUTTON")
+    if (hasClass(esummary, "need-dropmenu")) {
+        $.each(classList(esummary), function (i, c) {
+            if (builders[c])
+                builders[c].call(esummary, evt);
+        });
+    }
+    if (esummary.nodeName === "BUTTON")
         esummary = esummary.closest("summary");
     edetails = esummary.parentElement;
+    hotcrp.tooltip.close();
     was_open = is_ie ? hasClass(edetails.lastChild, "hidden") : edetails.open;
     if (!was_open && !modal) {
-        modal = document.createElement("div");
+        modal = classe("div", "modal transparent");
         modal.id = "dropmenu-modal";
-        modal.className = "modal transparent";
         edetails.parentElement.insertBefore(modal, edetails.nextsibling);
         modal.addEventListener("click", dropmenu_close, false);
     } else if (modal)
@@ -3819,32 +4253,44 @@ handle_ui.on("click.js-dropmenu-open", function (evt) {
 });
 
 handle_ui.on("click.dropmenu", function (evt) {
-    var li, es, bs, i;
-    if (evt.target.tagName === "A"
-        || evt.target.tagName === "BUTTON"
-        || evt.target.closest("ul") !== this) {
+    var tgt = evt.target, li, es, bs, i;
+    if (tgt.tagName === "A"
+        || tgt.tagName === "BUTTON"
+        || tgt.closest("ul") !== this) {
         return;
     }
-    li = evt.target.closest("li");
+    li = tgt.closest("li");
     if (!li) {
         return;
     }
-    es = li.querySelectorAll("a");
+    es = li.querySelectorAll("button");
     if (es.length !== 1
-        && (bs = li.querySelectorAll("form")).length === 1) {
-        bs = bs[0].elements;
-        es = [];
-        for (i = 0; i !== bs.length; ++i) {
-            if (bs[i].type === "submit")
-                es.push(bs[i]);
-        }
+        && (bs = li.querySelectorAll("a")).length === 1) {
+        es = bs;
     }
-    if (es.length === 1) {
+    if (es.length !== 1) {
+        return;
+    }
+    if (es[0].tagName === "A"
+        && es[0].href
+        && !event_key.is_default_a(evt)) {
+        window.open(es[0].href, "_blank", "noopener");
+    } else {
         es[0].click();
         evt.preventDefault();
         handle_ui.stopPropagation(evt);
     }
 });
+
+hotcrp.dropmenu = {
+    add_builder: function (s, f) {
+        builders[s] = f;
+    },
+    close: function (e) {
+        if (!e || e.closest("details[open]"))
+            dropmenu_close();
+    }
+};
 
 })($);
 
@@ -3852,7 +4298,7 @@ handle_ui.on("click.dropmenu", function (evt) {
 // autosubmit
 
 $(document).on("keypress", "input.js-autosubmit", function (evt) {
-    if (event_modkey(evt) || event_key(evt) !== "Enter") {
+    if (!event_key.is_submit_enter(evt, true)) {
         return;
     }
     var f = evt.target.form,
@@ -3877,8 +4323,7 @@ $(document).on("keypress", "input.js-autosubmit", function (evt) {
 
 handle_ui.on("js-keydown-enter-submit", function (evt) {
     if (evt.type === "keydown"
-        && !(event_modkey(evt) & (event_modkey.SHIFT | event_modkey.ALT))
-        && event_key(evt) === "Enter") {
+        && event_key.is_submit_enter(evt, true)) {
         $(evt.target.form).trigger("submit");
         evt.preventDefault();
     }
@@ -3942,29 +4387,13 @@ return {
         }
     },
     make_icon: function (s, xc) {
-        var t = parse(s), span_rto, span_rti;
-        if (t > 1) {
-            span_rto = document.createElement("span");
-            span_rto.className = "rto rt" + canon[t] + (xc || "");
-            span_rti = document.createElement("span");
-            span_rto.appendChild(span_rti);
-            span_rti.className = "rti";
-            span_rti.textContent = icon_texts[t];
-            span_rti.title = tooltips[t];
-            return span_rto;
-        } else {
+        var t = parse(s);
+        if (t <= 1) {
             return null;
         }
-    },
-    unparse_icon_html: function (s, xc) {
-        var t = parse(s);
-        if (t > 1) {
-            return '<span class="rto rt'.concat(
-                canon[t], xc || "", '"><span class="rti" title="', tooltips[t],
-                '">', icon_texts[t], '</span></span>');
-        } else {
-            return "";
-        }
+        var span_rti = classe("span", "rti", icon_texts[t]);
+        span_rti.title = tooltips[t];
+        return classe("span", "rto rt".concat(canon[t], xc || ""), span_rti);
     }
 };
 })();
@@ -3975,15 +4404,8 @@ return {
 (function ($) {
 function make_radio(name, value, text, revtype) {
     var rname = "assrev" + name, id = rname + "_" + value,
-        div = document.createElement("div"),
-        label = document.createElement("label"),
-        span_checkc = document.createElement("span"),
-        input = document.createElement("input");
-    div.className = "assignment-ui-choice checki";
-    div.appendChild(label);
-    label.appendChild(span_checkc);
-    span_checkc.className = "checkc";
-    span_checkc.appendChild(input);
+        input = classe("input"),
+        label = classe("label", "", classe("span", "checkc", input));
     input.type = "radio";
     input.name = rname;
     input.value = value;
@@ -3991,9 +4413,7 @@ function make_radio(name, value, text, revtype) {
     if (value == revtype) {
         input.className = "assignment-ui-radio want-focus";
         input.checked = input.defaultChecked = true;
-        var u = document.createElement("u");
-        u.append(text);
-        text = u;
+        text = classe("u", "", text);
     } else {
         input.className = "assignment-ui-radio";
     }
@@ -4001,12 +4421,12 @@ function make_radio(name, value, text, revtype) {
         label.append(review_types.make_icon(value), " ");
     }
     label.append(text);
-    return div;
+    return classe("div", "assignment-ui-choice checki", label);
 }
 function append_round_selector(name, revtype, $a, ctr) {
     var $as = $a.closest(".has-assignment-set"), rounds;
     try {
-        rounds = parse_json($as.attr("data-review-rounds") || "[]");
+        rounds = JSON.parse($as.attr("data-review-rounds") || "[]");
     } catch (e) {
         rounds = [];
     }
@@ -4128,8 +4548,8 @@ handle_ui.on("input.js-email-populate", function () {
         v = self.value.toLowerCase().trim(),
         f = this.form,
         fn = null, ln = null, nn = null, af = null,
-        country = null, orcid = null,
-        placeholder = false;
+        country = null, orcid = null, placeholder = false,
+        idx;
     if (this.name === "email" || this.name === "uemail") {
         fn = f.elements.firstName;
         ln = f.elements.lastName;
@@ -4137,12 +4557,13 @@ handle_ui.on("input.js-email-populate", function () {
         country = f.elements.country;
         orcid = f.elements.orcid;
         placeholder = true;
-    } else if (this.name.substring(0, 13) === "authors:email") {
-        var idx = this.name.substring(13);
-        nn = f.elements["authors:name" + idx];
-        af = f.elements["authors:affiliation" + idx];
-    } else if (this.name.substring(0, 14) === "contacts:email") {
-        nn = f.elements["contacts:name" + this.name.substring(14)];
+    } else if (this.name.startsWith("authors:")) {
+        idx = parseInt(this.name.substring(8));
+        nn = f.elements["authors:" + idx + ":name"];
+        af = f.elements["authors:" + idx + ":affiliation"];
+    } else if (this.name.startsWith("contacts:")) {
+        idx = parseInt(this.name.substring(9));
+        nn = f.elements["contacts:" + idx + ":name"];
     }
     if (!fn && !ln && !nn && !af)
         return;
@@ -4215,6 +4636,39 @@ handle_ui.on("input.js-email-populate", function () {
 });
 })();
 
+function render_mail_preview(e, mp, fields) {
+    var i, f, e1;
+    e.replaceChildren();
+    function make_field_div(label, text) {
+        var e1 = document.createElement("div"),
+            e2 = document.createElement("label"),
+            e3 = document.createElement("div");
+        e1.className = "mail-field";
+        e2.append(label);
+        e3.className = "flex-fill-0";
+        e3.append(text);
+        e1.append(e2, e3);
+        return e1;
+    }
+    for (i = 0; i !== fields.length; ++i) {
+        f = fields[i];
+        if (!mp[f])
+            continue;
+        if (f === "recipients") {
+            if (!mp.recipient_description)
+                continue;
+            e1 = make_field_div("To:", mp.recipient_description);
+        } if (f === "subject" || f === "to" || f === "cc" || f === "reply-to") {
+            e1 = make_field_div({subject: "Subject:", to: "To:", cc: "Cc:", "reply-to": "Reply-to:"}[f], mp[f]);
+        } else if (f === "body") {
+            e1 = document.createElement("div");
+            e1.className = "mail-preview-body";
+            e1.append(mp[f]);
+        }
+        e.appendChild(e1);
+    }
+}
+
 handle_ui.on("js-request-review-preview-email", function (evt) {
     var f = this.closest("form"),
         a = {p: siteinfo.paperid, template: "requestreview"};
@@ -4227,22 +4681,22 @@ handle_ui.on("js-request-review-preview-email", function (evt) {
         if (x !== "")
             a[field] = x;
     }
-    fv("email", "<email>");
+    fv("email", "<EMAIL>");
     fv("firstName", "");
     fv("lastName", "");
     fv("affiliation", "Affiliation");
     fv("reason", "");
     if (a.firstName == null && a.lastName == null)
-        a.lastName = "<Name>";
+        a.lastName = "<NAME>";
     $.ajax(hoturl("api/mailtext", a), {
         method: "GET", success: function (data) {
             if (data.ok && data.subject && data.body) {
                 var hc = popup_skeleton();
                 hc.push('<h2>External review request email preview</h2>');
-                hc.push('<pre></pre>');
+                hc.push('<div class="mail-preview"></div>');
                 hc.push_actions(['<button type="button" class="btn-primary no-focus" name="cancel">Close</button>']);
                 var $d = hc.show(false);
-                $d.find("pre").text("Subject: " + data.subject + "\n\n" + data.body);
+                render_mail_preview($d.find("div.mail-preview")[0], data, ["subject", "body"]);
                 hc.show(true);
             }
         }
@@ -4253,21 +4707,96 @@ handle_ui.on("js-request-review-preview-email", function (evt) {
 
 // mail
 handle_ui.on("change.js-mail-recipients", function () {
-    var plimit = this.closest("form").elements.plimit;
-    foldup.call(this, null, {f: !!plimit && !plimit.checked, n: 8});
-    var sopt = $(this).find("option[value='" + this.value + "']");
-    foldup.call(this, null, {f: sopt.hasClass("mail-want-no-papers"), n: 9});
-    foldup.call(this, null, {f: !sopt.hasClass("mail-want-since"), n: 10});
+    var f = this.form,
+        plimit = f.elements.plimit,
+        toelt = f.elements.to,
+        recip = toelt.options[toelt.selectedIndex],
+        subjelt = f.elements.subject,
+        bodyelt = f.elements.body;
+    foldup.call(this, null, {open: !plimit || plimit.checked, n: 8});
+    if (!recip) {
+        return;
+    }
+    foldup.call(this, null, {open: !hasClass(recip, "mail-want-no-papers"), n: 9});
+    foldup.call(this, null, {open: hasClass(recip, "mail-want-since"), n: 10});
+
+    if (!recip.hasAttribute("data-default-message")
+        || !subjelt
+        || (subjelt.value.trim() !== "" && input_differs(subjelt))
+        || !bodyelt
+        || (bodyelt.value.trim() !== "" && input_differs(bodyelt))) {
+        return;
+    }
+    var dm = JSON.parse(f.getAttribute("data-default-messages")),
+        dmt = recip.getAttribute("data-default-message");
+    if (dm && dm[dmt] && dm[dmt].subject !== subjelt.value) {
+        subjelt.value = subjelt.defaultValue = dm[dmt].subject;
+    }
+    if (dm && dm[dmt] && dm[dmt].body !== bodyelt.value) {
+        bodyelt.value = bodyelt.defaultValue = dm[dmt].body;
+    }
 });
 
-handle_ui.on(".js-mail-populate-template", function () {
-    var i = -1, defv = input_default_value(this);
-    for (var j = 0; j !== this.options.length; ++j) {
-        if (this.options[j].value === defv)
-            i = j;
+handle_ui.on("js-mail-set-template", function () {
+    var $d, f, templatelist;
+    function selected_tm(tn) {
+        tn = tn || f.elements.template.value;
+        var i = 0;
+        while (templatelist[i] && templatelist[i].name !== tn) {
+            ++i;
+        }
+        return templatelist[i] || null;
     }
-    document.location = hoturl("mail", {template: this.value});
-    this.selectedIndex = i;
+    function render() {
+        var fl = f.querySelector("fieldset").lastChild, tm = selected_tm();
+        fl.replaceChildren();
+        tm && render_mail_preview(fl, tm, ["recipients", "cc", "reply-to", "subject", "body"]);
+    }
+    function submitter() {
+        document.location = hoturl("mail", {template: selected_tm().name});
+    }
+    demand_load.mail_templates().then(function (tl) {
+        var hc = popup_skeleton({className: "modal-dialog-w40"}), i, mf;
+        templatelist = tl;
+        hc.push('<h2>Mail templates</h2>');
+        if (tl.length) {
+            hc.push('<select name="template" class="w-100 want-focus" size="5">', '</select>');
+            for (i = 0; tl[i]; ++i) {
+                hc.push('<option value="'.concat(tl[i].name, i ? '">' : '" selected>', escape_html(tl[i].title), '</option>'));
+            }
+            hc.pop();
+            hc.push('<fieldset class="mt-4 modal-demo-fieldset"><div class="mail-preview"></div></fieldset>');
+            hc.push_actions(['<button type="submit" name="go" class="btn-primary">Use template</button>',
+                '<button type="button" name="cancel">Cancel</button>']);
+        } else {
+            hc.push('<p>There are no template you can load.</p>');
+            hc.push_actions(['<button type="button"> name="cancel">OK</button>']);
+        }
+        $d = hc.show(false);
+        f = $d.find("form")[0];
+        if (f.elements.template) {
+            mf = document.getElementById("mailform");
+            if (mf && mf.elements.template && mf.elements.template.value
+                && selected_tm(mf.elements.template.value))
+                f.elements.template.value = mf.elements.template.value;
+            $(f.elements.template).on("input", render);
+            $(f).on("submit", submitter);
+            $(f.elements.go).on("click")
+            render();
+        }
+        hc.show(true);
+    });
+});
+
+handle_ui.on("js-mail-preview-choose", function () {
+    toggleClass(this.closest("fieldset"), "mail-preview-unchoose", !this.checked);
+});
+
+handle_ui.on("js-mail-send-phase-1", function () {
+    var send = this.querySelector("button");
+    send.disabled = true;
+    send.textContent = "Sending mail…";
+    addClass(document.body, "wait");
 });
 
 
@@ -4365,12 +4894,217 @@ handle_ui.on(".js-badpairs-row", function (evt) {
 
 })();
 
+handle_ui.on(".js-autoassign-prepare", function () {
+    var k, v, a;
+    if (!this.elements.a || !(a = this.elements.a.value)) {
+        return;
+    }
+    this.action = hoturl_add(this.action, "a=" + encodeURIComponent(a));
+    for (k in this.elements) {
+        if (k.startsWith(a + ":")) {
+            v = this.elements[k].value;
+            if (v && typeof v === "string" && v.length < 100)
+                this.action = hoturl_add(this.action, encodeURIComponent(k) + "=" + encodeURIComponent(v));
+        }
+    }
+});
+
 
 // author entry
 (function ($) {
 
+function row_fill(row, i, defaults, changes) {
+    ++i;
+    var ipts, e, m, num = i + ".";
+    if ((e = row.querySelector(".row-counter"))
+        && e.textContent !== num)
+        e.replaceChildren(num);
+    ipts = row.querySelectorAll("input, select, textarea");
+    for (e of ipts) {
+        if (!e.name
+            || !(m = /^(.*?)(\d+|\$)(|:.*)$/.exec(e.name))
+            || m[2] == i)
+            continue;
+        e.name = m[1] + i + m[3];
+        if (defaults && e.name in defaults)
+            input_set_default_value(e, defaults[e.name]);
+        if (changes)
+            changes.push(e);
+    }
+}
+
+function is_row_interesting(row) {
+    var ipts = row.querySelectorAll("input, select, textarea"), e;
+    for (e of ipts) {
+        if (e.name
+            && ((e.value !== ""
+                 && e.value !== e.getAttribute("placeholder"))
+                || input_default_value(e) !== ""))
+            return true;
+    }
+    return false;
+}
+
+function row_add(group, before, button) {
+    var row, id = (button && button.getAttribute("data-row-template"))
+        || group.getAttribute("data-row-template");
+    if (!id || !(row = document.getElementById(id)))
+        return null;
+    if ("content" in row) {
+        row = row.content.cloneNode(true).firstElementChild;
+    } else {
+        row = row.firstChild.cloneNode(true);
+    }
+    group.insertBefore(row, before || null);
+    $(row).awaken();
+    return row;
+}
+
+function row_order_defaults(group) {
+    var ipts = group.querySelectorAll("input, select, textarea"),
+        e, defaults = {};
+    for (e of ipts) {
+        if (e.name)
+            defaults[e.name] = input_default_value(e);
+    }
+    return defaults;
+}
+
+function row_order_drag_confirm(group, defaults) {
+    var i, row, changes = [];
+    defaults = defaults || row_order_defaults(group);
+    for (row = group.firstElementChild, i = 0;
+         row; row = row.nextElementSibling, ++i) {
+        row_fill(row, i, defaults, changes);
+    }
+    row_order_autogrow(group, defaults);
+    $(changes).trigger("change");
+}
+
+function row_order_count(group) {
+    var nr = 0, row;
+    for (row = group.firstElementChild; row; row = row.nextElementSibling) {
+        if (row.clientHeight > 0)
+            ++nr;
+    }
+    return nr;
+}
+
+function row_order_autogrow(group, defaults) {
+    var min_rows = Math.max(+group.getAttribute("data-min-rows") || 0, 0),
+        max_rows = +group.getAttribute("data-max-rows") || 0,
+        nr, row, prev_row, interesting;
+    for (row = group.firstElementChild, nr = 0;
+         row; row = row.nextElementSibling, ++nr) {
+    }
+    while (nr < min_rows && (row = row_add(group))) {
+        row_fill(row, nr, defaults);
+        ++nr;
+    }
+    if (hasClass(group, "row-order-autogrow")) {
+        row = group.lastElementChild;
+        if (is_row_interesting(row)) {
+            if ((nr < max_rows || max_rows <= 0)
+                && (row = row_add(group))) {
+                row_fill(row, nr, defaults);
+                ++nr;
+            }
+        } else {
+            while (nr > min_rows && nr > 1) {
+                prev_row = row.previousElementSibling;
+                if (is_row_interesting(prev_row)) {
+                    break;
+                }
+                row.remove();
+                --nr;
+                row = prev_row;
+            }
+        }
+    }
+    var ndig = Math.ceil(Math.log10(nr + 1)).toString();
+    if (group.getAttribute("data-row-counter-digits") !== ndig) {
+        group.setAttribute("data-row-counter-digits", ndig);
+    }
+}
+
+handle_ui.on("dragstart.row-order-draghandle", function (evt) {
+    var row = this.closest(".draggable");
+    hotcrp.drag_block_reorder(this, row, function (draggable, group, changed) {
+        changed && row_order_drag_confirm(group);
+    }).start(evt);
+});
+hotcrp.dropmenu.add_builder("row-order-draghandle", function (evt) {
+    var details = this.closest("details"), menu,
+        row = this.closest(".draggable"), group = row.parentElement;
+    if (details) {
+        menu = details.lastElementChild.firstChild;
+        menu.replaceChildren();
+    } else {
+        menu = classe("ul", "uic dropmenu");
+        details = classe("details", "dropmenu-details",
+            classe("summary"),
+            classe("div", "dropmenu-container dropmenu-draghandle", menu));
+        details.setAttribute("role", "menu");
+        this.replaceWith(details);
+        details.firstChild.append(this);
+    }
+    menu.append(classe("li", "disabled", "(Drag to reorder)"));
+    function buttonli(className, attr, text) {
+        attr["class"] = className;
+        attr["type"] = "button";
+        return classe("li", attr.disabled ? "disabled" : "has-link", attre("button", attr, text));
+    }
+    menu.append(buttonli("link ui row-order-dragmenu move-up", {disabled: !row.previousElementSibling}, "Move up"));
+    menu.append(buttonli("link ui row-order-dragmenu move-down", {disabled: !row.nextElementSibling}, "Move down"));
+    if (group.hasAttribute("data-row-template")) {
+        var max_rows = +group.getAttribute("data-max-rows") || 0;
+        if (max_rows <= 0 || group.children.length < max_rows) {
+            menu.append(buttonli("link ui row-order-dragmenu insert-above", {}, "Insert row above"));
+            menu.append(buttonli("link ui row-order-dragmenu insert-below", {}, "Insert row below"));
+        }
+    }
+    var min_rows = Math.max(+group.getAttribute("data-min-rows") || 0, 0);
+    menu.append(buttonli("link ui row-order-dragmenu remove", {disabled: min_rows > 0 && row_order_count(group) <= min_rows}, "Remove"));
+});
+handle_ui.on("row-order-dragmenu", function (evt) {
+    hotcrp.dropmenu.close(this);
+    var row = this.closest(".draggable"), sib, group = row.parentElement,
+        defaults = row_order_defaults(group);
+    if (hasClass(this, "move-up") && (sib = row.previousElementSibling)) {
+        sib.before(row);
+    } else if (hasClass(this, "move-down") && (sib = row.nextElementSibling)) {
+        sib.after(row);
+    } else if (hasClass(this, "remove")) {
+        row.remove();
+    } else if (hasClass(this, "insert-above")) {
+        row_add(group, row);
+    } else if (hasClass(this, "insert-below")) {
+        row_add(group, row.nextElementSibling);
+    }
+    row_order_drag_confirm(group, defaults);
+});
+handle_ui.on("row-order-append", function (evt) {
+    var group = document.getElementById(this.getAttribute("data-rowset"));
+    row_add(group, null, this);
+});
+
+$(function () {
+    $(".need-row-order-autogrow").each(function () {
+        var group = this;
+        if (!hasClass(group, "row-order-autogrow")) {
+            addClass(group, "row-order-autogrow");
+            removeClass(group, "need-row-order-autogrow");
+            $(group).on("input change", "input, select, textarea", function () {
+                row_order_autogrow(group);
+            });
+        }
+    });
+});
+
+
+/* XXX obsolete */
 function row_order_change(e, delta, action) {
-    var $r, $tbody;
+    var $r, $tbody, tr;
     if (action > 0)
         $tbody = $(e);
     else {
@@ -4388,11 +5122,11 @@ function row_order_change(e, delta, action) {
     });
 
     if (action < 0) {
-        tooltip.erase();
+        hotcrp.tooltip.close();
         $r.remove();
         delta = 0;
     } else if (action == 0) {
-        var tr = $r[0];
+        tr = $r[0];
         for (; delta < 0 && tr.previousSibling; ++delta)
             $(tr).insertBefore(tr.previousSibling);
         for (; delta > 0 && tr.nextSibling; --delta)
@@ -4434,24 +5168,25 @@ function row_order_change(e, delta, action) {
 
     var changes = [];
     for (var i = 1; i <= trs.length; ++i) {
-        var $tr = $(trs[i - 1]),
-            td0h = $($tr[0].firstChild).html(),
+        tr = trs[i - 1];
+        var td0c = tr.firstChild.firstChild,
             new_index = null;
-        if (td0h !== i + "." && /^(?:\d+|\$).$/.test(td0h))
-            $($tr[0].firstChild).html(i + ".");
-        $tr.find("input, select, textarea").each(function () {
-            var m = /^(.*?)(\d+|\$)$/.exec(this.getAttribute("name"));
+        if (td0c && td0c.nodeType === 3 && td0c.data !== i + "."
+            && /^(?:\d+|\$).$/.test(td0c.data))
+            td0c.data = i + ".";
+        $(tr).find("input, select, textarea").each(function () {
+            var m = /^(.*?)(\d+|\$)(|:.*)$/.exec(this.getAttribute("name"));
             if (m && new_index === null) {
                 if (m[2] === '$') {
                     var f = this.form;
                     new_index = 1;
-                    while (f.elements[m[1] + new_index])
+                    while (f.elements[m[1] + new_index + m[3]])
                         ++new_index;
                 } else
                     new_index = i;
             }
             if (m && m[2] != new_index) {
-                this.name = m[1] + new_index;
+                this.name = m[1] + new_index + m[3];
                 if (this.name in defaults) {
                     input_set_default_value(this, defaults[this.name]);
                 }
@@ -4461,7 +5196,6 @@ function row_order_change(e, delta, action) {
     }
     $(changes).trigger("change");
 }
-
 function row_order_ui() {
     if (hasClass(this, "moveup"))
         row_order_change(this, -1, 0);
@@ -4476,18 +5210,7 @@ function row_order_ui() {
     }
 }
 handle_ui.on("row-order-ui", row_order_ui);
-
-$(function () {
-    $(".need-row-order-autogrow").each(function () {
-        if (!hasClass(this, "row-order-autogrow")) {
-            addClass(this, "row-order-autogrow");
-            removeClass(this, "need-row-order-autogrow");
-            $(this).on("input change", "input, select, textarea", function () {
-                row_order_change(this, 0, 0);
-            });
-        }
-    });
-});
+/* XXX end obsolete */
 
 })($);
 
@@ -4695,7 +5418,7 @@ $(function () {
     }
     if ($(".paperinfo-abstract").length) {
         check_abstract_height();
-        $("#foldpaper").on("fold unfold renderText", check_abstract_height);
+        $("#foldpaper").on("foldtoggle renderText", check_abstract_height);
         $(window).on("resize", check_abstract_height);
     }
 });
@@ -4706,7 +5429,7 @@ handle_ui.on("js-review-tokens", function () {
     var $d, hc = popup_skeleton();
     hc = popup_skeleton();
     hc.push('<h2>Review tokens</h2>');
-    hc.push('<p>Enter tokens to gain access to the corresponding reviews.</p>');
+    hc.push('<p>Review tokens implement fully anonymous reviewing. If you have been given review tokens, enter them here to view the corresponding papers and edit the reviews.</p>');
     hc.push('<input type="text" size="60" name="token" value="' + escape_html(this.getAttribute("data-review-tokens") || "") + '" placeholder="Review tokens">');
     hc.push_actions(['<button type="submit" name="save" class="btn-primary">Save tokens</button>',
         '<button type="button" name="cancel">Cancel</button>']);
@@ -4726,26 +5449,30 @@ handle_ui.on("js-review-tokens", function () {
     });
 });
 
-var review_form = (function ($) {
+(function ($) {
 var formj, form_order;
 
-tooltip.add_builder("rf-score", function (info) {
-    var $self = $(this), fieldj = formj[$self.data("rf")], score;
-    if (fieldj && fieldj.score_info
-        && (score = fieldj.score_info.parse($self.find("span.sv").text())))
-        info = $.extend({
-            content: fieldj.values[score - 1],
-            anchor: "w", near: $self.find("span")[0]
-        }, info);
+hotcrp.tooltip.add_builder("rf-score", function (info) {
+    var fieldj = formj[this.getAttribute("data-rf")];
+    if (fieldj && fieldj.parse_value) {
+        var svs = this.querySelectorAll("span.sv"), i, ts = [];
+        for (i = 0; i !== svs.length; ++i) {
+            var score = fieldj.parse_value(svs[i].textContent.replace(/\s*[.,]$/, ""));
+            score && ts.push(escape_html(score.title));
+        }
+        ts.length && (info = $.extend({
+            content: ts.join(", "), anchor: "w", near: svs[svs.length - 1]
+        }, info));
+    }
     return info;
 });
 
-tooltip.add_builder("rf-description", function (info) {
+hotcrp.tooltip.add_builder("rf-description", function (info) {
     var rv = $(this).closest(".rf");
     if (rv.length) {
         var fieldj = formj[rv.data("rf")];
         if (fieldj && (fieldj.description || fieldj.values)) {
-            var d = "", si, vo;
+            var d = "";
             if (fieldj.description) {
                 if (/<(?:p|div|table)/i.test(fieldj.description))
                     d += fieldj.description;
@@ -4754,9 +5481,9 @@ tooltip.add_builder("rf-description", function (info) {
             }
             if (fieldj.values) {
                 d += "<div class=\"od\">Choices are:</div>";
-                for (si = 0, vo = fieldj.score_info.value_order();
-                     si < vo.length; ++si)
-                    d += "<div class=\"od\"><strong class=\"rev_num " + fieldj.score_info.className(vo[si]) + "\">" + fieldj.score_info.unparse(vo[si]) + ".</strong>&nbsp;" + escape_html(fieldj.values[vo[si] - 1] || "") + "</div>";
+                fieldj.each_value(function (fv) {
+                    d = d.concat('<div class="od"><strong class="sv ', fv.className, '">', fv.symbol, fv.sp1, '</strong>', fv.sp2, escape_html(fv.title), '</div>');
+                });
             }
             info = $.extend({content: d, anchor: "w"}, info);
         }
@@ -4766,18 +5493,15 @@ tooltip.add_builder("rf-description", function (info) {
 
 function score_header_tooltips($j) {
     $j.find(".rf .revfn").attr("data-tooltip-info", "rf-description")
-        .each(tooltip);
+        .each(hotcrp.tooltip);
 }
 
 function field_visible(f, rrow) {
-    if (f.values && !f.required)
-        return f.uid in rrow;
-    else
-        return !!rrow[f.uid];
+    return rrow[f.uid] != null && rrow[f.uid] !== "";
 }
 
-function render_review_body(rrow) {
-    var t = "", foidx = 0, f, x, nextf, last_display = 0, display;
+function render_review_body_in(rrow, bodye) {
+    var foidx = 0, f, x, nextf, last_display = 0, display, fe, h3, e;
     for (foidx = 0; (nextf = form_order[foidx]) && !field_visible(nextf, rrow); ++foidx) {
     }
     while (nextf) {
@@ -4785,43 +5509,50 @@ function render_review_body(rrow) {
         for (++foidx; (nextf = form_order[foidx]) && !field_visible(nextf, rrow); ++foidx) {
         }
 
-        if (last_display != 1 && f.values && nextf && nextf.values) {
+        if (last_display != 1 && f.type !== "text" && nextf && nextf.type !== "text") {
             display = 1;
         } else {
             display = last_display == 1 ? 2 : 0;
         }
 
-        t = t.concat('<div class="rf rfd', display, '" data-rf="', f.uid,
-            '"><div class="revvt"><h3 class="rfehead"><label class="revfn">',
-            f.name_html, '</label>');
+        fe = document.createElement("div");
+        fe.className = "rf rfd" + display;
+        fe.setAttribute("data-rf", f.uid);
+        bodye.appendChild(fe);
+
+        e = document.createElement("span");
+        e.className = "revfn";
+        e.append(f.name);
+        h3 = document.createElement("h3");
+        h3.className = "rfehead";
+        h3.appendChild(e);
         x = f.visibility || "re";
         if (x === "audec" && hotcrp_status && hotcrp_status.myperm
             && hotcrp_status.myperm.some_author_can_view_decision) {
             x = "au";
         }
         if (x !== "au") {
-            t += '<div class="field-visibility">(' +
-                (({secret: "secret", admin: "administrators only",
-                   re: "hidden from authors", audec: "hidden from authors until decision",
-                   pconly: "hidden from authors and external reviewers"})[x] || x) +
-                ')</div>';
+            e = document.createElement("div");
+            e.className = "field-visibility";
+            x = ({
+                secret: "secret",
+                admin: "shown only to administrators",
+                re: "hidden from authors",
+                audec: "hidden from authors until decision",
+                pconly: "hidden from authors and external reviewers"
+            })[x] || x;
+            e.append("(" + x + ")");
+            h3.appendChild(e);
         }
-        t += '</h3></div>';
+        e = document.createElement("div");
+        e.className = "revvt";
+        e.appendChild(h3);
+        fe.appendChild(e);
 
-        if (!f.values) {
-            t += '<div class="revv revtext"></div>';
-        } else if (rrow[f.uid] && (x = f.score_info.parse(rrow[f.uid]))) {
-            t += '<p class="revv revscore"><span class="revscorenum">' +
-                f.score_info.unparse_revnum(x) + ' </span><span class="revscoredesc">' +
-                escape_html(f.values[x - 1] || "") + '</span></p>';
-        } else {
-            t += '<p class="revv revnoscore">' + (f.required ? "Unknown" : "No entry") + '</p>';
-        }
+        f.render_in(rrow[f.uid], rrow, fe);
 
-        t += '</div>';
         last_display = display;
     }
-    return t;
 }
 
 function ratings_counts(ratings) {
@@ -4843,9 +5574,12 @@ function unparse_ratings(ratings, user_rating, editable) {
     var rating_names = ["Good review", "Needs work", "Too short", "Too vague",
                         "Too narrow", "Disrespectful", "Not correct"];
     var t = [];
-    t.push('<span class="revrating-group flag fn">'
-           + (editable ? '<a href="" class="q ui js-revrating-unfold">' : '<a href="' + hoturl("help", {t: "revrate"}) + '" class="q">')
-           + '&#x2691;</a></span>');
+    t.push('<span class="revrating-flag fn">');
+    if (editable)
+        t.push('<button type="button" class="btn-qlink ui js-revrating-unfold">&#x2691;</button>');
+    else
+        t.push('<a href="'.concat(hoturl("help", {t: "revrate"}), '" class="q">&#x2691;</a>'));
+    t.push('</span>');
     for (var i = 0; i < rating_names.length; ++i) {
         if (editable) {
             var klass = "revrating-choice", bklass = "";
@@ -4881,7 +5615,7 @@ function unparse_ratings(ratings, user_rating, editable) {
 
 handle_ui.on("js-revrating-unfold", function (evt) {
     if (evt.target === this)
-        foldup.call(this, null, {f: false});
+        foldup.call(this, null, {open: true});
 });
 
 handle_ui.on("js-revrating", function () {
@@ -4944,7 +5678,7 @@ handle_ui.on("js-revrating", function () {
 function revrating_key(evt) {
     var k = event_key(evt);
     if ((k === "ArrowLeft" || k === "ArrowRight") && !event_modkey(evt)) {
-        foldup.call(this, null, {f: false});
+        foldup.call(this, null, {open: true});
         var wantbit = $(this).closest(".revrating-choice").attr("data-revrating-bit");
         if (wantbit != null) {
             if (k === "ArrowLeft" && wantbit > 0)
@@ -4960,133 +5694,423 @@ function revrating_key(evt) {
     }
 }
 
-function add_review(rrow) {
-    var hc = new HtmlCollector,
-        rid = rrow.pid + (rrow.ordinal || "r" + rrow.rid),
-        rlink = "p=".concat(rrow.pid, "&r=", rid),
-        has_user_rating = false, i;
+function make_review_h2(rrow, rlink, rdesc) {
+    var h2 = document.createElement("h2"),
+        ma = document.createElement("a"),
+        rd = document.createElement("span"), ed;
+    if (rrow.folded) {
+        ma.className = "qo ui js-foldup";
+        ma.setAttribute("href", "");
+        ma.setAttribute("data-fold-target", 20);
+        ma.appendChild(make_expander_element(20));
+    } else {
+        ma.className = "qo";
+        ma.setAttribute("href", hoturl("review", rlink));
+    }
+    rd.className = "revcard-header-name";
+    rd.append(rdesc);
+    ma.append(rd);
+    h2.append(ma);
+    if (rrow.editable) {
+        if (rrow.folded) {
+            ma = document.createElement("a");
+            ma.className = "qo";
+            ma.setAttribute("href", hoturl("review", rlink));
+            h2.append(" ", ma);
+        } else {
+            ma.append(" ");
+        }
+        ed = document.createElement("span");
+        ed.className = "t-editor";
+        ed.append("✎");
+        ma.append(ed);
+    }
+    return h2;
+}
+
+function append_review_id(rrow, eheader) {
+    var rth = null, ad = null, e, xc;
+    function add_rth(e) {
+        if (!rth) {
+            rth = document.createElement("div")
+            rth.className = "revthead";
+            eheader.appendChild(rth);
+        }
+        rth.append(e);
+    }
+    function add_ad(s) {
+        if (!ad) {
+            ad = document.createElement("address");
+            ad.className = "revname";
+            ad.setAttribute("itemprop", "author");
+            add_rth(ad);
+        }
+        ad.append(s);
+    }
+    if (rrow.review_token) {
+        add_ad("Review token " + rrow.review_token);
+    } else if (rrow.reviewer) {
+        e = document.createElement("span");
+        e.innerHTML = rrow.blind ? "[" + rrow.reviewer + "]" : rrow.reviewer;
+        rrow.reviewer_email && (e.title = rrow.reviewer_email);
+        add_ad(e);
+    }
+    if (rrow.rtype) {
+        xc = (rrow.submitted || rrow.approved ? "" : " rtinc") +
+            (rrow.subreview ? " rtsubrev" : "");
+        ad && ad.append(" ");
+        add_ad(review_types.make_icon(rrow.rtype, xc));
+        if (rrow.round) {
+            e = document.createElement("span");
+            e.className = "revround";
+            e.title = "Review round";
+            e.append(rrow.round);
+            ad.append(e);
+        }
+    }
+    if (rrow.modified_at) {
+        e = document.createElement("time");
+        e.className = "revtime";
+        e.dateTime = (new Date(rrow.modified_at * 1000)).toISOString();
+        e.append(rrow.modified_at_text);
+        add_rth(e);
+    }
+}
+
+hotcrp.add_review = function (rrow) {
+    var rid = rrow.pid + (rrow.ordinal || "r" + rrow.rid), rlink, rdesc,
+        has_user_rating = false,
+        e, earticle, eheader;
+
+    // review link and description
+    rlink = "p=".concat(rrow.pid, "&r=", rid);
     if (siteinfo.want_override_conflict)
         rlink += "&forceShow=1";
-
-    i = rrow.ordinal ? '" data-review-ordinal="' + rrow.ordinal : '';
-    hc.push('<article id="r'.concat(rid,
-                '" class="pcard revcard need-anchor-unfold has-fold ',
-                rrow.folded ? "fold20c" : "fold20o", '" data-pid="', rrow.pid,
-                '" data-rid="', rrow.rid, i, '">'), '</article>');
-
-    // HEADER
-    hc.push('<header class="revcard-head">', '</header>');
-
-    // review description
-    var rdesc = rrow.subreview ? "Subreview" : "Review";
+    rdesc = rrow.subreview ? "Subreview" : "Review";
     if (rrow.draft)
         rdesc = "Draft " + rdesc;
     if (rrow.ordinal)
         rdesc += " #" + rid;
 
-    // edit/text links
-    if (rrow.folded) {
-        hc.push('<h2><a class="qo ui js-foldup" href="" data-fold-target="20"><span class="expander"><span class="in0 fx20"><svg class="licon" width="0.75em" height="0.75em" viewBox="0 0 16 16" preserveAspectRatio="none"><path d="M1 1L8 15L15 1z" /></svg></span><span class="in1 fn20"><svg class="licon" width="0.75em" height="0.75em" viewBox="0 0 16 16" preserveAspectRatio="none"><path d="M1 1L15 8L1 15z" /></svg></span></span>', '</a></h2>');
-    } else {
-        hc.push('<h2><a class="qo" href="' + hoturl_html("review", rlink) + '">', '</a></h2>');
-    }
-    hc.push('<span class="revcard-header-name">' + rdesc + '</span>');
-    if (rrow.editable && rrow.folded) {
-        hc.push('</a> <a class="qo" href="' + hoturl_html("review", rlink) + '"><span class="t-editor">✎</span>');
-    } else if (rrow.editable) {
-        hc.push(' <span class="t-editor">✎</span>');
-    }
-    hc.pop();
+    earticle = document.createElement("article");
+    earticle.id = "r" + rid;
+    earticle.className = "pcard revcard need-anchor-unfold has-fold fold20" + (rrow.folded ? "c" : "o");
+    earticle.setAttribute("data-pid", rrow.pid);
+    earticle.setAttribute("data-rid", rrow.rid);
+    rrow.ordinal && earticle.setAttribute("data-review-ordinal", rrow.ordinal);
+    $(".pcontainer")[0].appendChild(earticle);
 
-    // author info
-    var revname = "", revtime;
-    if (rrow.review_token) {
-        revname = 'Review token ' + rrow.review_token;
-    } else if (rrow.reviewer) {
-        revname = rrow.reviewer;
-        if (rrow.blind)
-            revname = '[' + revname + ']';
-        if (rrow.reviewer_email)
-            revname = '<span title="' + rrow.reviewer_email + '">' + revname + '</span>';
-    }
-    if (rrow.rtype) {
-        var xc = (rrow.submitted || rrow.approved ? "" : " rtinc") +
-            (rrow.subreview ? " rtsubrev" : "");
-        revname += (revname ? " " : "") + review_types.unparse_icon_html(rrow.rtype, xc);
-        if (rrow.round)
-            revname += '<span class="revround" title="Review round">' + escape_html(rrow.round) + '</span>';
-    }
-    if (rrow.modified_at) {
-        revtime = '<time class="revtime" datetime="' + (new Date(rrow.modified_at * 1000)).toISOString() + '">' + rrow.modified_at_text + '</time>';
-    }
-    if (revname || revtime) {
-        hc.push('<div class="revthead">');
-        if (revname)
-            hc.push('<address class="revname" itemprop="author">' + revname + '</address>');
-        if (revtime)
-            hc.push(revtime);
-        hc.push('</div>');
-    }
-    hc.push_pop('<hr class="c">');
+    // header
+    eheader = document.createElement("header");
+    eheader.className = "revcard-head";
+    eheader.appendChild(make_review_h2(rrow, rlink, rdesc));
+    append_review_id(rrow, eheader);
+    e = document.createElement("hr");
+    e.className = "c";
+    eheader.appendChild(e);
+    earticle.appendChild(eheader);
 
+    // messages
     if (rrow.message_list) {
-        hc.push('<div class="revcard-feedback fx20"><ul class="feedback-list"></ul></div>');
+        e = document.createElement("div");
+        e.className = "revcard-feedback fx20";
+        e.appendChild(render_feedback_list(rrow.message_list));
+        earticle.appendChild(e);
     }
 
     // body
-    hc.push('<div class="revcard-render fx20">', '</div>');
-    hc.push_pop(render_review_body(rrow));
+    e = document.createElement("div");
+    e.className = "revcard-render fx20";
+    earticle.appendChild(e);
+    render_review_body_in(rrow, e);
 
     // ratings
     has_user_rating = "user_rating" in rrow;
     if ((rrow.ratings && rrow.ratings.length) || has_user_rating) {
-        hc.push('<div class="revcard-rating fx20">', '</div>');
-        hc.push(unparse_ratings(rrow.ratings || [], rrow.user_rating || 0, has_user_rating));
+        e = document.createElement("div");
+        e.className = "revcard-rating fx20";
+        earticle.appendChild(e);
+        e.innerHTML = unparse_ratings(rrow.ratings || [], rrow.user_rating || 0, has_user_rating);
     }
 
     // complete render
-    var $j = $(hc.render()).appendTo($(".pcontainer"));
-    $j.find(".revtext").each(function () {
-        var fuid = this.closest(".rf").getAttribute("data-rf");
-        render_text.onto(this, rrow.format, rrow[fuid]);
-    });
-    if (rrow.message_list) {
-        var ul = $j.find(".revcard-feedback")[0].firstChild;
-        for (i = 0; i !== rrow.message_list.length; ++i) {
-            append_feedback_to(ul, rrow.message_list[i]);
-        }
-    }
     if (has_user_rating) {
-        $j.find(".revrating.editable").on("keydown", "button.js-revrating", revrating_key);
+        $(earticle).find(".revrating.editable").on("keydown", "button.js-revrating", revrating_key);
     }
-    score_header_tooltips($j);
+    score_header_tooltips($(earticle));
     navsidebar.set("r" + rid, rdesc);
+};
+
+function ReviewField(fj) {
+    this.uid = fj.uid;
+    this.name = fj.name;
+    this.name_html = escape_html(this.name);
+    this.type = fj.type;
+    if (fj.description != null)
+        this.description = fj.description;
+    if (fj.order != null)
+        this.order = fj.order;
+    if (fj.visibility != null)
+        this.visibility = fj.visibility;
+    if (fj.required != null)
+        this.required = fj.required;
+    if (fj.exists_if != null)
+        this.exists_if = fj.exists_if;
 }
 
-return {
-    set_form: function (j) {
-        var i, f;
-        formj = formj || {};
-        for (i in j) {
-            f = j[i];
-            f.uid = f.uid || i;
-            f.name_html = escape_html(f.name);
-            if (f.options)
-                f.values = f.options;
-            if (f.values)
-                f.score_info = make_score_info(f.values.length, f.start, f.scheme);
-            formj[f.uid] = f;
+ReviewField.prototype.render_in = function (fv, rrow, fe) {
+    var e = document.createElement("div");
+    e.className = "revv revtext";
+    fe.appendChild(e);
+    render_text.onto(e, rrow.format, fv);
+}
+
+function DiscreteValues_ReviewField(fj) {
+    var i, n, step, sym, ch;
+    ReviewField.call(this, fj);
+    this.values = fj.values;
+    this.symbols = fj.symbols;
+    this.start = fj.start || null;
+    this.scheme = fj.scheme || "sv";
+    this.flip = !!fj.flip;
+    if (!this.symbols) {
+        sym = this.symbols = [];
+        n = this.values.length;
+        step = this.flip ? -1 : 1;
+        ch = this.start ? this.start.charCodeAt(0) : 0;
+        for (i = this.flip ? n - 1 : 0; i >= 0 && i < n; i += step) {
+            sym.push(ch ? String.fromCharCode(ch + i) : i + 1);
         }
+    }
+    this.scheme_info = make_color_scheme(this.values.length, this.scheme, this.flip);
+    this.default_numeric = true;
+    for (i = 0; i !== n; ++i) {
+        if (this.symbols[i] !== i + 1) {
+            this.default_numeric = false;
+            break;
+        }
+    }
+}
+
+Object.setPrototypeOf(DiscreteValues_ReviewField.prototype, ReviewField.prototype);
+
+DiscreteValues_ReviewField.prototype.indexOfSymbol = function (s) {
+    if (s == null || s === 0 || s === "")
+        return -1;
+    var i, n = this.values.length;
+    for (i = 0; i !== n; ++i) {
+        if (this.symbols[i] == s)
+            return i;
+    }
+    return -1;
+};
+
+DiscreteValues_ReviewField.prototype.value_info = function (sidx) {
+    var j = sidx - 1, title = this.values[j];
+    if (title == null)
+        return null;
+    return {
+        value: sidx, symbol: this.symbols[j], title: title,
+        sp1: title === "" ? "" : ".", sp2: title === "" ? "" : " ",
+        className: this.scheme_info.className(sidx)
+    };
+};
+
+DiscreteValues_ReviewField.prototype.each_value = function (fn) {
+    var i, n = this.values.length, step = this.flip ? -1 : 1;
+    for (i = this.flip ? n : 1; i >= 1 && i <= n; i += step) {
+        fn(this.value_info(i));
+    }
+};
+
+DiscreteValues_ReviewField.prototype.parse_value = function (txt) {
+    var si = this.indexOfSymbol(txt);
+    return si >= 0 ? this.value_info(si + 1) : null;
+};
+
+DiscreteValues_ReviewField.prototype.rgb = function (val) {
+    return this.scheme_info.rgb(val);
+};
+
+DiscreteValues_ReviewField.prototype.className = function (val) {
+    return this.scheme_info.className(val);
+};
+
+
+function make_score_no_value(txt) {
+    var pe = document.createElement("p");
+    pe.className = "revv revnoscore";
+    pe.append(txt);
+    return pe;
+}
+
+function make_score_value(val) {
+    var pe = document.createElement("p"), e, es;
+    pe.className = "revv revscore";
+    e = document.createElement("span");
+    e.className = "revscorenum";
+    es = document.createElement("strong");
+    es.className = "rev_num sv " + val.className;
+    es.append(val.symbol, val.sp1);
+    e.append(es, val.sp2);
+    pe.appendChild(e);
+    if (val.title) {
+        e = document.createElement("span");
+        e.className = "revscoredesc";
+        e.append(val.title);
+        pe.appendChild(e);
+    }
+    return pe;
+}
+
+
+function Score_ReviewField(fj) {
+    DiscreteValues_ReviewField.call(this, fj);
+}
+
+Object.setPrototypeOf(Score_ReviewField.prototype, DiscreteValues_ReviewField.prototype);
+
+Score_ReviewField.prototype.unparse_symbol = function (val, split) {
+    if (val === (val | 0) && this.symbols[val - 1] != null)
+        return this.symbols[val - 1];
+    var rval = (split ? Math.round(val * 2) / 2 : Math.round(val)) - 1;
+    if (this.default_numeric || rval < 0 || rval > this.symbols.length - 1)
+        return val.toFixed(2);
+    else if (rval === (rval | 0))
+        return this.symbols[rval];
+    else if (this.flip)
+        return this.symbols[rval + 0.5].concat("~", this.symbols[rval - 0.5]);
+    else
+        return this.symbols[rval - 0.5].concat("~", this.symbols[rval + 0.5]);
+};
+
+Score_ReviewField.prototype.render_in = function (fv, rrow, fe) {
+    var val;
+    if (fv !== false && (val = this.parse_value(fv))) {
+        fe.appendChild(make_score_value(val));
+    } else {
+        fe.appendChild(make_score_no_value(fv === false ? "N/A" : "Unknown"));
+    }
+}
+
+
+function Checkbox_ReviewField(fj) {
+    ReviewField.call(this, fj);
+    this.scheme = fj.scheme || "sv";
+    this.scheme_info = make_color_scheme(2, this.scheme || "sv", false);
+}
+
+Object.setPrototypeOf(Checkbox_ReviewField.prototype, ReviewField.prototype);
+
+Checkbox_ReviewField.prototype.value_info = function (b) {
+    return {
+        value: !!b, symbol: b ? "✓" : "✗", title: b ? "Yes" : "No",
+        sp1: "", sp2: " ", className: this.scheme_info.className(b ? 2 : 1)
+    };
+};
+
+Checkbox_ReviewField.prototype.parse_value = function (txt) {
+    if (typeof txt === "boolean" || !txt)
+        return this.value_info(txt);
+    var m = txt.match(/^\s*(|✓|1|yes|on|true|y|t)(|✗|0|no|none|off|false|n|f|-|–|—)\s*$/i);
+    if (m && (m[1] === "" || m[2] === ""))
+        return this.value_info(m[1] !== "");
+    return null;
+};
+
+Checkbox_ReviewField.prototype.rgb = function (val) {
+    return this.scheme_info.rgb(val ? 2 : 1);
+};
+
+Checkbox_ReviewField.prototype.className = function (val) {
+    return this.scheme_info.className(val ? 2 : 1);
+};
+
+Checkbox_ReviewField.prototype.unparse_symbol = function (val) {
+    if (val === true || val === false)
+        return val ? "✓" : "✗";
+    else if (val < 0.125)
+        return "✗";
+    else if (val < 0.375)
+        return "¼✓";
+    else if (val < 0.625)
+        return "½✓";
+    else if (val < 0.875)
+        return "¾✓";
+    else
+        return "✓";
+};
+
+Checkbox_ReviewField.prototype.render_in = function (fv, rrow, fe) {
+    var val;
+    if ((val = this.parse_value(fv))) {
+        fe.appendChild(make_score_value(val));
+    } else {
+        fe.appendChild(make_score_no_value("Unknown"));
+    }
+}
+
+
+function Checkboxes_ReviewField(fj) {
+    DiscreteValues_ReviewField.call(this, fj);
+}
+
+Object.setPrototypeOf(Checkboxes_ReviewField.prototype, DiscreteValues_ReviewField.prototype);
+
+Checkboxes_ReviewField.prototype.unparse_symbol = function (val) {
+    if (!val || val !== (val | 0))
+        return "";
+    var s, b, t = [];
+    for (s = b = 1; b <= val; b <<= 1, ++s) {
+        if (val & b)
+            t.push(this.symbols[s - 1]);
+    }
+    return t.join(",");
+};
+
+Checkboxes_ReviewField.prototype.render_in = function (fv, rrow, fe) {
+    if (fv && fv.length === 0) {
+        fe.appendChild(make_score_no_value("None"));
+    } else if (fv) {
+        var i, si, unk;
+        for (i = 0; i !== fv.length; ++i) {
+            if ((si = this.indexOfSymbol(fv[i])) >= 0) {
+                fe.appendChild(make_score_value(this.value_info(si + 1)));
+            } else if (!unk) {
+                fe.appendChild(make_score_no_value("Unknown"));
+                unk = true;
+            }
+        }
+    }
+};
+
+
+hotcrp.make_review_field = function (fj) {
+    if (fj.type === "radio" || fj.type === "dropdown")
+        return new Score_ReviewField(fj);
+    else if (fj.type === "checkbox")
+        return new Checkbox_ReviewField(fj);
+    else if (fj.type === "checkboxes")
+        return new Checkboxes_ReviewField(fj);
+    else
+        return new ReviewField(fj);
+};
+
+hotcrp.set_review_form = function (j) {
+    var i;
+    formj = formj || {};
+    for (i in j) {
+        formj[j[i].uid] = hotcrp.make_review_field(j[i]);
         form_order = $.map(formj, function (v) { return v; });
         form_order.sort(function (a, b) { return a.order - b.order; });
-    },
-    add_review: add_review
+    }
 };
+
 })($);
 
 
 // comments
-var papercomment = (function ($) {
+(function ($) {
 var vismap = {
         rev: "hidden from authors",
         pc: "hidden from authors and external reviewers",
@@ -5094,7 +6118,8 @@ var vismap = {
     },
     emojiregex = /^(?:(?:\ud83c[\udde6-\uddff]\ud83c[\udde6-\uddff]|(?:(?:[\u231a\u231b\u23e9-\u23ec\u23f0\u23f3\u25fd\u25fe\u2614\u2615\u2648-\u2653\u267f\u2693\u26a1\u26aa\u26ab\u26bd\u26be\u26c4\u26c5\u26ce\u26d4\u26ea\u26f2\u26f3\u26f5\u26fa\u26fd\u2705\u270a\u270b\u2728\u274c\u274e\u2753-\u2755\u2757\u2795-\u2797\u27b0\u27bf\u2b1b\u2b1c\u2b50\u2b55]|\ud83c[\udc04\udccf\udd8e\udd91-\udd9a\udde6-\uddff\ude01\ude1a\ude2f\ude32-\ude36\ude38-\ude3a\ude50\ude51\udf00-\udf20\udf2d-\udf35\udf37-\udf7c\udf7e-\udf93\udfa0-\udfca\udfcf-\udfd3\udfe0-\udff0\udff4\udff8-\udfff]|\ud83d[\udc00-\udc3e\udc40\udc42-\udcfc\udcff-\udd3d\udd4b-\udd4e\udd50-\udd67\udd7a\udd95\udd96\udda4\uddfb-\ude4f\ude80-\udec5\udecc\uded0-\uded2\uded5-\uded7\udedd-\udedf\udeeb\udeec\udef4-\udefc\udfe0-\udfeb\udff0]|\ud83e[\udd0c-\udd3a\udd3c-\udd45\udd47-\uddff\ude70-\ude74\ude78-\ude7c\ude80-\ude86\ude90-\udeac\udeb0-\udeba\udec0-\udec5\uded0-\uded9\udee0-\udee7\udef0-\udef6])\ufe0f?|(?:[\u0023\u002a\u0030-\u0039\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u2199\u21a9\u21aa\u2328\u23cf\u23ed-\u23ef\u23f1\u23f2\u23f8-\u23fa\u24c2\u25aa\u25ab\u25b6\u25c0\u25fb\u25fc\u2600-\u2604\u260e\u2611\u2618\u261d\u2620\u2622\u2623\u2626\u262a\u262e\u262f\u2638-\u263a\u2640\u2642\u265f\u2660\u2663\u2665\u2666\u2668\u267b\u267e\u2692\u2694-\u2697\u2699\u269b\u269c\u26a0\u26a7\u26b0\u26b1\u26c8\u26cf\u26d1\u26d3\u26e9\u26f0\u26f1\u26f4\u26f7-\u26f9\u2702\u2708\u2709\u270c\u270d\u270f\u2712\u2714\u2716\u271d\u2721\u2733\u2734\u2744\u2747\u2763\u2764\u27a1\u2934\u2935\u2b05-\u2b07\u3030\u303d\u3297\u3299]|\ud83c[\udd70\udd71\udd7e\udd7f\ude02\ude37\udf21\udf24-\udf2c\udf36\udf7d\udf96\udf97\udf99-\udf9b\udf9e\udf9f\udfcb-\udfce\udfd4-\udfdf\udff3\udff5\udff7]|\ud83d[\udc3f\udc41\udcfd\udd49\udd4a\udd6f\udd70\udd73-\udd79\udd87\udd8a-\udd8d\udd90\udda5\udda8\uddb1\uddb2\uddbc\uddc2-\uddc4\uddd1-\uddd3\udddc-\uddde\udde1\udde3\udde8\uddef\uddf3\uddfa\udecb\udecd-\udecf\udee0-\udee5\udee9\udef0\udef3])\ufe0f)\u20e3?(?:\ud83c[\udffb-\udfff]|(?:\udb40[\udc20-\udc7e])+\udb40\udc7f)?(?:\u200d(?:(?:[\u231a\u231b\u23e9-\u23ec\u23f0\u23f3\u25fd\u25fe\u2614\u2615\u2648-\u2653\u267f\u2693\u26a1\u26aa\u26ab\u26bd\u26be\u26c4\u26c5\u26ce\u26d4\u26ea\u26f2\u26f3\u26f5\u26fa\u26fd\u2705\u270a\u270b\u2728\u274c\u274e\u2753-\u2755\u2757\u2795-\u2797\u27b0\u27bf\u2b1b\u2b1c\u2b50\u2b55]|\ud83c[\udc04\udccf\udd8e\udd91-\udd9a\udde6-\uddff\ude01\ude1a\ude2f\ude32-\ude36\ude38-\ude3a\ude50\ude51\udf00-\udf20\udf2d-\udf35\udf37-\udf7c\udf7e-\udf93\udfa0-\udfca\udfcf-\udfd3\udfe0-\udff0\udff4\udff8-\udfff]|\ud83d[\udc00-\udc3e\udc40\udc42-\udcfc\udcff-\udd3d\udd4b-\udd4e\udd50-\udd67\udd7a\udd95\udd96\udda4\uddfb-\ude4f\ude80-\udec5\udecc\uded0-\uded2\uded5-\uded7\udedd-\udedf\udeeb\udeec\udef4-\udefc\udfe0-\udfeb\udff0]|\ud83e[\udd0c-\udd3a\udd3c-\udd45\udd47-\uddff\ude70-\ude74\ude78-\ude7c\ude80-\ude86\ude90-\udeac\udeb0-\udeba\udec0-\udec5\uded0-\uded9\udee0-\udee7\udef0-\udef6])\ufe0f?|(?:[\u0023\u002a\u0030-\u0039\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u2199\u21a9\u21aa\u2328\u23cf\u23ed-\u23ef\u23f1\u23f2\u23f8-\u23fa\u24c2\u25aa\u25ab\u25b6\u25c0\u25fb\u25fc\u2600-\u2604\u260e\u2611\u2618\u261d\u2620\u2622\u2623\u2626\u262a\u262e\u262f\u2638-\u263a\u2640\u2642\u265f\u2660\u2663\u2665\u2666\u2668\u267b\u267e\u2692\u2694-\u2697\u2699\u269b\u269c\u26a0\u26a7\u26b0\u26b1\u26c8\u26cf\u26d1\u26d3\u26e9\u26f0\u26f1\u26f4\u26f7-\u26f9\u2702\u2708\u2709\u270c\u270d\u270f\u2712\u2714\u2716\u271d\u2721\u2733\u2734\u2744\u2747\u2763\u2764\u27a1\u2934\u2935\u2b05-\u2b07\u3030\u303d\u3297\u3299]|\ud83c[\udd70\udd71\udd7e\udd7f\ude02\ude37\udf21\udf24-\udf2c\udf36\udf7d\udf96\udf97\udf99-\udf9b\udf9e\udf9f\udfcb-\udfce\udfd4-\udfdf\udff3\udff5\udff7]|\ud83d[\udc3f\udc41\udcfd\udd49\udd4a\udd6f\udd70\udd73-\udd79\udd87\udd8a-\udd8d\udd90\udda5\udda8\uddb1\uddb2\uddbc\uddc2-\uddc4\uddd1-\uddd3\udddc-\uddde\udde1\udde3\udde8\uddef\uddf3\uddfa\udecb\udecd-\udecf\udee0-\udee5\udee9\udef0\udef3])\ufe0f)\u20e3?(?:\ud83c[\udffb-\udfff]|(?:\udb40[\udc20-\udc7e])+\udb40\udc7f)?)*)*[ \t]*){1,3}$/,
     cmts = {}, has_unload = false, resp_rounds = {},
-    twiddle_start = siteinfo.user && siteinfo.user.cid ? siteinfo.user.cid + "~" : "###";
+    editor_observer, editing_list,
+    twiddle_start = siteinfo.user && siteinfo.user.uid ? siteinfo.user.uid + "~" : "###";
 
 function unparse_tag(tag, strip_value) {
     var pos;
@@ -5109,7 +6134,7 @@ function unparse_tag(tag, strip_value) {
     return tag;
 }
 
-function find_cj(elt) {
+function cj_find(elt) {
     return cmts[elt.closest(".cmtid").id];
 }
 
@@ -5135,7 +6160,7 @@ function cj_name(cj) {
     }
 }
 
-function comment_identity_time(cj, editing) {
+function cmt_identity_time(cj, editing) {
     var t = [], x, i;
     if (cj.response || cj.is_new) {
     } else if (cj.editable) {
@@ -5154,17 +6179,18 @@ function comment_identity_time(cj, editing) {
                + cj.ordinal + '</span></a></div>');
     }
     if (cj.author && cj.author_hidden) {
-        t.push('<address class="cmtname fold9c" itemprop="author"><span class="fx9' +
+        t.push('<address class="has-fold cmtname fold9c" itemprop="author"><span class="fx9' +
                (cj.author_email ? '" title="' + cj.author_email : '') +
-               '">' + cj.author + ' </span><a class="ui q js-foldup" href="" data-fold-target="9" title="Toggle author"><span class="fn9"><span class="expander"><svg class="licon" width="0.75em" height="0.75em" viewBox="0 0 16 16" preserveAspectRatio="none"><path d="M1 1L15 8L1 15z" /></svg></span>' +
-               (cj.author_pseudonym || "<i>Hidden</i>") + '</span><span class="fx9">(deanonymized)</span></a></address>');
+               '">' + cj.author + ' </span><button type="button" class="btn-qlink ui js-foldup" data-fold-target="9" title="Toggle author"><span class="fn9"><span class="expander"><svg class="licon" width="0.75em" height="0.75em" viewBox="0 0 16 16" preserveAspectRatio="none"><path d="M1 1L15 8L1 15z" /></svg></span>' +
+               (cj.author_pseudonym || "<i>Hidden</i>") + '</span><span class="fx9">(deanonymized)</span></button></address>');
     } else if (cj.author) {
         x = cj.author;
-        if (cj.blind && cj.visibility === "au") {
-            x = "[" + x + "]";
-        }
-        if (cj.author_pseudonym) {
-            x = cj.author_pseudonym + ' ' + x;
+        if (cj.author_pseudonym && cj.author_pseudonymous) {
+            x = cj.author_pseudonym.concat(" [", x, "]");
+        } else if (cj.author_pseudonym) {
+            x = x.concat(" (", cj.author_pseudonym, ")");
+        } else if (cj.author_pseudonymous) {
+            x = "[".concat(cj.author, "]");
         }
         t.push('<address class="cmtname' +
                (cj.author_email ? '" title="' + cj.author_email : "") +
@@ -5189,7 +6215,7 @@ function comment_identity_time(cj, editing) {
     return t.join("");
 }
 
-function edit_allowed(cj, override) {
+function cmt_is_editable(cj, override) {
     var p = hotcrp_status.myperm;
     if (cj.response)
         p = p.can_responds && p.can_responds[cj.response];
@@ -5199,7 +6225,7 @@ function edit_allowed(cj, override) {
 }
 
 
-function render_editing(hc, cj) {
+function cmt_render_form(hc, cj) {
     var x, btnbox = [], cid = cj_cid(cj), bnote;
 
     hc.push('<form class="cmtform">', '</form>');
@@ -5212,7 +6238,7 @@ function render_editing(hc, cj) {
     hc.push('<div class="f-i">', '</div>');
     var fmt = render_text.format(cj.format), fmtnote = fmt.description || "";
     if (fmt.has_preview) {
-        fmtnote += (fmtnote ? ' <span class="barsep">·</span> ' : "") + '<a href="" class="ui js-togglepreview" data-format="' + (fmt.format || 0) + '">Preview</a>';
+        fmtnote += (fmtnote ? ' <span class="barsep">·</span> ' : "") + '<button type="button" class="link ui js-togglepreview" data-format="' + (fmt.format || 0) + '">Preview</button>';
     }
     fmtnote && hc.push('<div class="formatdescription">' + fmtnote + '</div>');
     hc.push_pop('<textarea name="text" class="w-text cmttext suggest-emoji mentions need-suggest c" rows="5" cols="60" placeholder="Leave a comment"></textarea>');
@@ -5220,8 +6246,8 @@ function render_editing(hc, cj) {
     hc.push('<div class="cmteditinfo fold3c">', '</div>');
 
     // attachments
-    hc.push('<div class="entryi has-editable-attachments hidden" id="' + cid + '-attachments" data-dtype="-2" data-document-prefix="cmtdoc"><label for="' + cid + '-attachments">Attachments</label></div>');
-    btnbox.push('<button type="button" name="attach" class="btn-licon need-tooltip ui js-add-attachment" aria-label="Attach file" data-editable-attachments="' + cid + '-attachments">' + $("#licon-attachment").html() + '</button>');
+    hc.push('<div class="entryi has-editable-attachments hidden" id="'.concat(cid, '-attachments" data-dtype="-2" data-document-prefix="attachment"><span class="label">Attachments</span></div>'));
+    btnbox.push('<button type="button" name="attach" class="btn-licon need-tooltip ui js-add-attachment" aria-label="Attach file" data-editable-attachments="'.concat(cid, '-attachments">', $("#i-attachment").html(), '</button>'));
 
     // visibility
     if (!cj.response && (!cj.by_author || cj.by_author_visibility)) {
@@ -5251,18 +6277,18 @@ function render_editing(hc, cj) {
     if (!cj.response && !cj.by_author) {
         hc.push('<div class="entryi fx3"><label for="' + cid + '-tags">Tags</label>', '</div>')
         hc.push_pop('<input id="' + cid + '-tags" name="tags" type="text" size="50" placeholder="Comment tags">');
-        btnbox.push('<button type="button" name="showtags" class="btn-licon need-tooltip" aria-label="Tags">' + $("#licon-tag").html() + '</button>');
+        btnbox.push('<button type="button" name="showtags" class="btn-licon need-tooltip" aria-label="Tags">' + $("#i-tag").html() + '</button>');
     }
 
     // delete
     if (!cj.is_new) {
         x = cj.response ? "response" : "comment";
-        if (edit_allowed(cj)) {
+        if (cmt_is_editable(cj)) {
             bnote = "Are you sure you want to delete this " + x + "?";
         } else {
             bnote = "Are you sure you want to override the deadline and delete this " + x + "?";
         }
-        btnbox.push('<button type="button" name="delete" class="btn-licon need-tooltip" aria-label="Delete ' + x + '" data-override-text="' + bnote + '">' + $("#licon-trash").html() + '</button>');
+        btnbox.push('<button type="button" name="delete" class="btn-licon need-tooltip" aria-label="Delete ' + x + '" data-override-text="' + bnote + '">' + $("#i-trash").html() + '</button>');
     }
 
     // response ready
@@ -5277,7 +6303,7 @@ function render_editing(hc, cj) {
 
     // actions: [btnbox], [wordcount] || cancel, save/submit
     hc.push('<div class="w-text aabig aab mt-3">', '</div>');
-    bnote = edit_allowed(cj) ? "" : '<div class="hint">(admin only)</div>';
+    bnote = cmt_is_editable(cj) ? "" : '<div class="hint">(admin only)</div>';
     if (btnbox.length)
         hc.push('<div class="aabut"><div class="btnbox">' + btnbox.join("") + '</div></div>');
     if (cj.response && resp_rounds[cj.response].words > 0)
@@ -5293,7 +6319,7 @@ function render_editing(hc, cj) {
     hc.pop_n(2);
 }
 
-function visibility_change() {
+function cmt_visibility_change() {
     var form = this.closest("form"),
         vis = form.elements.visibility,
         topic = form.elements.topic,
@@ -5346,7 +6372,7 @@ function visibility_change() {
     blind && toggleClass(blind, "hidden", vis.value !== "au");
 }
 
-function ready_change() {
+function cmt_ready_change() {
     this.form.elements.bsubmit.textContent = this.checked ? "Submit" : "Save draft";
 }
 
@@ -5357,15 +6383,15 @@ function make_update_words(celt, wlimit) {
         wce.className = "words" + (wlimit < wc ? " wordsover" :
                                    (wlimit * 0.9 < wc ? " wordsclose" : ""));
         if (wlimit < wc)
-            wce.innerHTML = plural(wc - wlimit, "word") + " over";
+            wce.textContent = plural(wc - wlimit, "word") + " over";
         else
-            wce.innerHTML = plural(wlimit - wc, "word") + " left";
+            wce.textContent = plural(wlimit - wc, "word") + " left";
     }
     if (wce)
         $(celt).find("textarea").on("input", setwc).each(setwc);
 }
 
-function activate_editing_messages(cj, form) {
+function cmt_edit_messages(cj, form) {
     var ul = document.createElement("ul"), msg;
     ul.className = "feedback-list";
     if (cj.response
@@ -5373,13 +6399,20 @@ function activate_editing_messages(cj, form) {
         && resp_rounds[cj.response].instrux !== "none") {
         append_feedback_to(ul, {message: '<5>' + resp_rounds[cj.response].instrux, status: 0});
     }
+    if (cj.response) {
+        if (resp_rounds[cj.response].done > now_sec()) {
+            append_feedback_to(ul, {message: strftime("<0>The response deadline is %X your time.", new Date(resp_rounds[cj.response].done * 1000)), status: -2 /*MessageSet::WARNING_NOTE*/});
+        } else if (cj.draft) {
+            append_feedback_to(ul, {message: "<0>The response deadline has passed and this draft response will not be shown to reviewers.", status: 2});
+        }
+    }
     if (cj.response
         && !hotcrp_status.myperm.is_author) {
-        append_feedback_to(ul, {message: '<0>You aren’t a contact for this paper, but as an administrator you can edit the authors’ response.', status: -1});
+        append_feedback_to(ul, {message: '<0>You aren’t a contact for this paper, but as an administrator you can edit the authors’ response.', status: -4 /*MessageSet::MARKED_NOTE*/});
     } else if (cj.review_token
                && hotcrp_status.myperm.review_tokens
                && hotcrp_status.myperm.review_tokens.indexOf(cj.review_token) >= 0) {
-        append_feedback_to(ul, {message: '<0>You have a review token for this paper, so your comment will be anonymous.', status: -1});
+        append_feedback_to(ul, {message: '<0>You have a review token for this paper, so your comment will be anonymous.', status: -4 /*MessageSet::MARKED_NOTE*/});
     } else if (!cj.response
                && cj.author_email
                && siteinfo.user.email
@@ -5388,31 +6421,24 @@ function activate_editing_messages(cj, form) {
             msg = "<0>You didn’t write this comment, but as a fellow author you can edit it.";
         else
             msg = "<0>You didn’t write this comment, but as an administrator you can edit it.";
-        append_feedback_to(ul, {message: msg, status: -1});
-    }
-    if (cj.response) {
-        if (resp_rounds[cj.response].done > now_sec()) {
-            append_feedback_to(ul, {message: strftime("<0>The response deadline is %X your time.", new Date(resp_rounds[cj.response].done * 1000)), status: -4});
-        } else if (cj.draft) {
-            append_feedback_to(ul, {message: "<0>The response deadline has passed and this draft response will not be shown to reviewers.", status: 2});
-        }
-    }
-    if (siteinfo.user
-        && (siteinfo.user.is_actas || (siteinfo.user.session_users || []).length > 1)) {
-        append_feedback_to(ul, {message: "<0>Commenting as " + siteinfo.user.email, status: -4});
+        append_feedback_to(ul, {message: msg, status: -4 /*MessageSet::MARKED_NOTE*/});
+    } else if (cj.is_new
+               && siteinfo.user
+               && (siteinfo.user.is_actas || (siteinfo.user.session_users || []).length > 1)) {
+        append_feedback_to(ul, {message: "<0>Commenting as " + siteinfo.user.email, status: -2 /*MessageSet::WARNING_NOTE*/});
     }
     if (ul.firstChild) {
         form.parentElement.insertBefore(ul, form);
     }
 }
 
-function activate_editing(celt, cj) {
-    var i, elt, tags = [], form = $(celt).find("form")[0];
-    activate_editing_messages(cj, form);
+function cmt_start_edit(celt, cj) {
+    var i, elt, tags = [], form = celt.querySelector("form");
+    cmt_edit_messages(cj, form);
 
     $(form.elements.text).text(cj.text || "")
-        .on("keydown", keydown_editor)
-        .on("hotcrprenderpreview", render_preview)
+        .on("keydown", cmt_keydown)
+        .on("hotcrprenderpreview", cmt_render_preview)
         .autogrow();
 
     var vis = cj.visibility
@@ -5420,15 +6446,15 @@ function activate_editing(celt, cj) {
         || (cj.by_author ? "au" : "rev");
     $(form.elements.visibility).val(vis)
         .attr("data-default-value", vis)
-        .on("change", visibility_change);
+        .on("change", cmt_visibility_change);
 
     var topic = (cj.is_new ? cj.topic || hotcrp_status.myperm.default_comment_topic : cj.topic) || "rev";
     $(form.elements.topic).val(topic)
         .attr("data-default-value", topic)
-        .on("change", visibility_change);
+        .on("change", cmt_visibility_change);
 
     if ((elt = form.elements.visibility || form.elements.topic)) {
-        visibility_change.call(elt);
+        cmt_visibility_change.call(elt);
     }
 
     for (i in cj.tags || []) {
@@ -5442,7 +6468,7 @@ function activate_editing(celt, cj) {
     if (cj.docs && cj.docs.length) {
         $(celt).find(".has-editable-attachments").removeClass("hidden").append('<div class="entry"></div>');
         for (i in cj.docs || [])
-            $(celt).find(".has-editable-attachments .entry").append(render_edit_attachment(i, cj.docs[i]));
+            $(celt).find(".has-editable-attachments .entry").append(cmt_render_attachment_input(+i + 1, cj.docs[i]));
     }
 
     if (!cj.visibility || cj.blind) {
@@ -5452,8 +6478,8 @@ function activate_editing(celt, cj) {
     if (cj.response) {
         if (resp_rounds[cj.response].words > 0)
             make_update_words(celt, resp_rounds[cj.response].words);
-        var $ready = $(form.elements.ready).on("click", ready_change);
-        ready_change.call($ready[0]);
+        var $ready = $(form.elements.ready).on("click", cmt_ready_change);
+        cmt_ready_change.call($ready[0]);
     }
 
     if (cj.is_new) {
@@ -5462,47 +6488,118 @@ function activate_editing(celt, cj) {
         form.elements.blind && addClass(form.elements.blind, "ignore-diff");
     }
 
-    $(form).on("submit", submit_editor).on("click", "button", buttonclick_editor);
+    $(form).on("submit", cmt_submit).on("click", "button", cmt_button_click);
     hiliter_children(form);
     $(celt).awaken();
 }
 
-function render_edit_attachment(i, doc) {
+function cmt_render_attachment_input(ctr, doc) {
     var hc = new HtmlCollector;
-    hc.push('<div class="has-document compact" data-dtype="-2" data-document-name="cmtdoc_' + doc.docid + '_' + i + '">', '</div>');
+    hc.push('<div class="has-document compact" data-dtype="-2" data-document-name="attachment:'.concat(ctr, '">'), '</div>');
     hc.push('<div class="document-file">', '</div>');
-    render_attachment_link(hc, doc);
+    cmt_render_attachment(hc, doc);
     hc.pop();
-    hc.push('<div class="document-actions"><a class="ui js-remove-document document-action" href="">Delete</a></div>');
+    hc.push('<div class="document-actions"><button type="button" class="link ui js-remove-document">Delete</button><input type="hidden" name="attachment:'.concat(ctr, '" value="', doc.docid, '"></div>'));
     return hc.render();
 }
 
-function render_attachment_link(hc, doc) {
-    hc.push('<a href="' + escape_html(siteinfo.site_relative + doc.siteurl) + '" class="q">', '</a>');
+function cmt_render_attachment(hc, doc) {
+    hc.push('<a href="' + escape_html(siteinfo.site_relative + doc.siteurl) + '" class="qo">', '</a>');
     if (doc.mimetype === "application/pdf") {
-        hc.push('<img src="' + siteinfo.assets + 'images/pdf.png" alt="[PDF]" class="sdlimg">');
+        hc.push('<img src="' + siteinfo.assets + 'images/pdf.png" alt="[PDF]" class="sdlimg"> ');
     } else {
-        hc.push('<img src="' + siteinfo.assets + 'images/generic.png" alt="[Attachment]" class="sdlimg">');
+        hc.push('<img src="' + siteinfo.assets + 'images/generic.png" alt="[Attachment]" class="sdlimg"> ');
     }
-    hc.push(' ' + escape_html(doc.unique_filename || doc.filename || "Attachment"));
+    hc.push('<u class="x">' + escape_html(doc.unique_filename || doc.filename || "Attachment") + '</u>');
     if (doc.size != null) {
         hc.push(' <span class="dlsize">(' + unparse_byte_size(doc.size) + ')</span>');
     }
     hc.pop();
 }
 
-function beforeunload() {
+function cmt_beforeunload() {
     var i, $cs = $(".cmtform"), text;
     if (has_unload) {
         for (i = 0; i !== $cs.length; ++i) {
             text = $cs[i].elements.text.value.trimEnd();
-            if (!text_eq(text, find_cj($cs[i]).text || ""))
+            if (!text_eq(text, cj_find($cs[i]).text || ""))
                 return "If you leave this page now, your comments will be lost.";
         }
     }
 }
 
-function make_save_callback(cj) {
+function cmt_focus(e) {
+    if (!hasClass(e, "need-focus")) {
+        return;
+    }
+    removeClass(e, "need-focus");
+    if (!hasClass(e, "popout")) {
+        $(e).scrollIntoView();
+    }
+    var te = e.querySelector("form").elements.text;
+    te.focus();
+    if (te.setSelectionRange) {
+        te.setSelectionRange(te.value.length, te.value.length);
+        te.scrollTo(0, Math.max(0, te.scrollHeight - te.clientHeight));
+    }
+}
+
+function cmt_edit_observer(entries) {
+    var i, e, want, have;
+    for (i = 0; i !== entries.length; ++i) {
+        e = entries[i];
+        if (e.isIntersecting) {
+            e.target.setAttribute("data-intersecting", "true");
+        } else {
+            e.target.removeAttribute("data-intersecting");
+        }
+    }
+    for (i = 0; i !== editing_list.length; ++i) {
+        e = editing_list[i];
+        want = have = hasClass(e, "popout");
+        if (i !== editing_list.length - 1
+            || !e.previousSibling
+            || e.previousSibling.hasAttribute("data-intersecting")) {
+            want = false;
+        } else if (!e.previousSibling.hasAttribute("data-intersecting")
+                   && !e.hasAttribute("data-intersecting")) {
+            want = true;
+        }
+        if (want !== have) {
+            toggleClass(e, "popout", want);
+            $(e.querySelector("textarea")).autogrow();
+        }
+        if (hasClass(e, "need-focus")) {
+            cmt_focus(e, true);
+        }
+    }
+}
+
+function cmt_toggle_editing(celt, is_editing) {
+    if (!is_editing && celt.previousSibling && celt.previousSibling.className === "cmtcard-placeholder") {
+        var i = editing_list.indexOf(celt);
+        editing_list.splice(i, 1);
+        editor_observer.unobserve(celt.previousSibling);
+        editor_observer.unobserve(celt);
+        celt.previousSibling.remove();
+    }
+    if (is_editing && (!celt.previousSibling || celt.previousSibling.className !== "cmtcard-placeholder")
+        && window.IntersectionObserver) {
+        editor_observer = editor_observer || new IntersectionObserver(cmt_edit_observer, {rootMargin: "16px 0px"});
+        var e = classe("div", "cmtcard-placeholder");
+        celt.before(e);
+        editing_list = editing_list || [];
+        editing_list.push(celt);
+        editor_observer.observe(e);
+        editor_observer.observe(celt);
+    }
+    toggleClass(celt, "is-editing", !!is_editing);
+    if (!is_editing) {
+        removeClass(celt, "popout");
+    }
+}
+
+function cmt_save_callback(cj) {
     var cid = cj_cid(cj), celt = $$(cid), form = $(celt).find("form")[0];
     return function (data) {
         if (!data.ok) {
@@ -5519,9 +6616,9 @@ function make_save_callback(cj) {
             $(form.elements.draft).remove();
             return;
         }
-        removeClass(celt, "is-editing");
+        cmt_toggle_editing(celt, false);
         var editing_response = cj.response
-            && edit_allowed(cj, true)
+            && cmt_is_editable(cj, true)
             && (!data.cmt || data.cmt.draft);
         if (!data.cmt && editing_response) {
             data.cmt = {is_new: true, response: cj.response, editable: true};
@@ -5545,7 +6642,7 @@ function make_save_callback(cj) {
             }
         }
         if (data.cmt) {
-            render_comment(data.cmt, editing_response);
+            cmt_render(data.cmt, editing_response);
         }
         if (data.message_list) {
             $(celt).find(".cmtmsg").html(render_message_list(data.message_list));
@@ -5553,13 +6650,13 @@ function make_save_callback(cj) {
     };
 }
 
-function save_editor(elt, action, really) {
-    var cj = find_cj(elt), cid = cj_cid(cj), form = $("#" + cid).find("form")[0];
+function cmt_save(elt, action, really) {
+    var cj = cj_find(elt), cid = cj_cid(cj), form = $("#" + cid).find("form")[0];
     if (!really) {
-        if (!edit_allowed(cj)) {
+        if (!cmt_is_editable(cj)) {
             var submitter = form.elements.bsubmit || elt;
             override_deadlines.call(submitter, function () {
-                save_editor(elt, action, true);
+                cmt_save(elt, action, true);
             });
             return;
         } else if (cj.response
@@ -5568,7 +6665,7 @@ function save_editor(elt, action, really) {
                    && (action === "delete" || !form.elements.ready.checked)) {
             elt.setAttribute("data-override-text", "The response is currently visible to reviewers. Are you sure you want to " + (action === "submit" ? "unsubmit" : "delete") + " it?");
             override_deadlines.call(elt, function () {
-                save_editor(elt, action, true);
+                cmt_save(elt, action, true);
             });
             return;
         }
@@ -5589,7 +6686,7 @@ function save_editor(elt, action, really) {
     siteinfo.want_override_conflict && (arg.forceShow = 1);
     action === "delete" && (arg.delete = 1);
     var url = hoturl("=api/comment", arg),
-        callback = make_save_callback(cj);
+        callback = cmt_save_callback(cj);
     if (window.FormData) {
         $.ajax(url, {
             method: "POST", data: new FormData(form), success: callback,
@@ -5600,23 +6697,27 @@ function save_editor(elt, action, really) {
     }
 }
 
-function keydown_editor(evt) {
-    if (event_key(evt) === "Enter" && event_modkey(evt) === event_modkey.META) {
+function cmt_keydown(evt) {
+    var key = event_key(evt);
+    if (key === "Enter" && event_key.is_submit_enter(evt, false)) {
         evt.preventDefault();
-        save_editor(this, "submit");
+        cmt_save(this, "submit");
+    } else if (key === "Escape" && !form_differs(this.form)) {
+        evt.preventDefault();
+        cmt_render(cj_find(this), false);
     }
 }
 
-function buttonclick_editor(evt) {
-    var self = this, cj = find_cj(this);
+function cmt_button_click(evt) {
+    var self = this, cj = cj_find(this);
     if (this.name === "bsubmit") {
         evt.preventDefault();
-        save_editor(this, "submit");
+        cmt_save(this, "submit");
     } else if (this.name === "cancel") {
-        render_comment(cj, false);
+        cmt_render(cj, false);
     } else if (this.name === "delete") {
         override_deadlines.call(this, function () {
-            save_editor(self, self.name, true);
+            cmt_save(self, self.name, true);
         });
     } else if (this.name === "showtags") {
         fold($(this.form).find(".cmteditinfo")[0], false, 3);
@@ -5624,25 +6725,29 @@ function buttonclick_editor(evt) {
     }
 }
 
-function submit_editor(evt) {
+function cmt_submit(evt) {
     evt.preventDefault();
-    save_editor(this, "submit");
+    cmt_save(this, "submit");
 }
 
-function render_comment(cj, editing) {
+function cmt_render(cj, editing) {
     var hc = new HtmlCollector, t, chead, i,
         cid = cj_cid(cj), celt = $$(cid);
 
     // clear current comment
+    if (document.activeElement && celt.contains(document.activeElement)) {
+        document.activeElement.blur();
+    }
     $(celt).find("textarea, input[type=text]").unautogrow();
     while (celt.lastChild && !hasClass(celt.lastChild, "cmtcard-head")) {
         celt.removeChild(celt.lastChild);
     }
 
     if (cj.is_new && !editing) {
+        cmt_toggle_editing(celt, false);
         var ide = celt.closest(".cmtid");
         navsidebar.remove(ide);
-        $("#ccactions a[href='#" + ide.id + "']").closest(".aabut").removeClass("hidden");
+        $("#k-comment-actions a[href='#" + ide.id + "']").closest(".aabut").removeClass("hidden");
         $(ide).remove();
         return;
     }
@@ -5677,11 +6782,11 @@ function render_comment(cj, editing) {
         hc.push('<h2><span class="cmtcard-header-name">Edit comment</span></h2>');
     } else if (cj.editable && !editing && cj.response) {
         var $h2 = $(chead).find("h2");
-        if (!$h2.find("a").length) {
-            $h2.html('<a href="" class="qo ui cmteditor">' + $h2.html() + ' <span class="t-editor">✎</span></a>');
+        if (!$h2.find("button").length) {
+            $h2.html('<button type="button" class="qo ui cmteditor">' + $h2.html() + ' <span class="t-editor">✎</span></button>');
         }
     }
-    t = comment_identity_time(cj, editing);
+    t = cmt_identity_time(cj, editing);
     if (cj.response) {
         chead.find(".cmtthead").remove();
         chead.append('<div class="cmtthead">' + t + '</div>');
@@ -5696,20 +6801,20 @@ function render_comment(cj, editing) {
         hc.push('<p class="feedback is-warning">Reviewers can’t see this draft response.</p>');
     }
     if (editing) {
-        render_editing(hc, cj);
+        cmt_render_form(hc, cj);
     } else {
         hc.push('<div class="cmttext"></div>');
         if (cj.docs && cj.docs.length) {
             hc.push('<div class="cmtattachments">', '</div>');
             for (i = 0; i !== cj.docs.length; ++i)
-                render_attachment_link(hc, cj.docs[i]);
+                cmt_render_attachment(hc, cj.docs[i]);
             hc.pop();
         }
     }
 
     // render
     $(celt).append(hc.render());
-    toggleClass(celt, "is-editing", !!editing);
+    cmt_toggle_editing(celt, editing);
     if (cj.response) {
         t = cj_name(cj);
         var $chead_name = chead.find(".cmtcard-header-name");
@@ -5721,11 +6826,11 @@ function render_comment(cj, editing) {
 
     // fill body
     if (editing) {
-        activate_editing(celt, cj);
+        cmt_start_edit(celt, cj);
     } else {
         if (cj.text !== false) {
-            render_comment_text(cj.format, cj.text || "", cj.response,
-                                $(celt).find(".cmttext"), chead);
+            cmt_render_text(cj.format, cj.text || "", cj.response,
+                            $(celt).find(".cmttext")[0], chead);
         } else if (cj.response) {
             t = '<p class="feedback is-warning">';
             if (cj.word_count)
@@ -5736,41 +6841,118 @@ function render_comment(cj, editing) {
                 "response not shown</p>";
             $(celt).find(".cmttext").html(t);
         }
-        (cj.response ? chead.parent() : $(celt)).find("a.cmteditor").click(edit_this);
+        (cj.response ? chead.parent() : $(celt)).find(".cmteditor").click(edit_this);
     }
 
     return $(celt);
 }
 
-function render_comment_text(format, value, response, textj, chead) {
-    var wlimit, wc;
-    if (response
-        && resp_rounds[response]
-        && (wlimit = resp_rounds[response].words) > 0) {
+function cmt_render_text(format, value, response, texte, chead) {
+    var wc, rrd = response && resp_rounds[response],
+        aftertexte = null, buttone;
+    if (rrd && rrd.words > 0) {
         wc = count_words(value);
-        if (wc > 0) {
-            chead && chead.append('<div class="cmtthead words">' + plural(wc, "word") + '</div>');
+        var wordse = null;
+        if (wc > 0 && chead) {
+            wordse = document.createElement("div");
+            wordse.className = "cmtthead words";
+            wordse.textContent = plural(wc, "word");
+            chead[0].appendChild(wordse);
         }
-        if (wc > wlimit) {
-            chead && chead.find(".words").addClass("wordsover");
-            wc = count_words_split(value, wlimit);
-            textj.addClass("has-overlong overlong-collapsed").prepend('<div class="overlong-divider"><div class="overlong-allowed"></div><div class="overlong-mark"><div class="overlong-expander"><button class="ui js-overlong-expand" aria-expanded="false">Show full-length response</button></div></div></div><div class="overlong-content"></div>');
-            var e = textj.find(".overlong-allowed")[0];
-            render_text.onto(e, format, wc[0]);
-            textj = textj.find(".overlong-content");
+        if (wc > rrd.words) {
+            wordse && addClass(wordse, "wordsover");
+            wc = count_words_split(value, rrd.words);
+            if (rrd.truncate && !hotcrp_status.myperm.allow_administer) {
+                buttone = classe("button", "ui js-overlong-expand", "Truncated for length");
+                buttone.type = "button";
+                buttone.disabled = true;
+                aftertexte = classe("div", "overlong-expander", buttone);
+                value = wc[0].trimEnd() + "…";
+            } else {
+                buttone = classe("button", "ui js-overlong-expand", "Show full-length response");
+                buttone.type = "button";
+                buttone.ariaExpanded = "false";
+                var allowede = classe("div", "overlong-allowed"),
+                    dividere = classe("div", "overlong-divider",
+                        allowede,
+                        classe("div", "overlong-mark",
+                            classe("div", "overlong-expander", buttone))),
+                    contente = classe("div", "overlong-content");
+                addClass(texte, "has-overlong");
+                addClass(texte, "overlong-collapsed");
+                texte.prepend(dividere, contente);
+                texte = contente;
+                render_text.onto(allowede, format, wc[0]);
+            }
         }
     }
-    render_text.onto(textj[0], format, value);
-    toggleClass(textj[0], "emoji-only", emojiregex.test(value));
+    render_text.onto(texte, format, value);
+    aftertexte && texte.append(aftertexte);
+    toggleClass(texte, "emoji-only", emojiregex.test(value));
 }
 
-function render_preview(evt, format, value, dest) {
-    var cj = find_cj(evt.target);
-    render_comment_text(format, value, cj ? cj.response : 0, $(dest), null);
+function cmt_render_preview(evt, format, value, dest) {
+    var cj = cj_find(evt.target);
+    cmt_render_text(format, value, cj ? cj.response : 0, dest, null);
     return false;
 }
 
-function comment_content_function(item) {
+function add_comment(cj, editing) {
+    var cid = cj_cid(cj), celt = $$(cid);
+    cmts[cid] = cj;
+    if (editing == null
+        && cj.response
+        && cj.draft
+        && cj.editable
+        && hotcrp_status.myperm
+        && hotcrp_status.myperm.is_author) {
+        editing = true;
+    }
+    if (celt) {
+        cmt_render(cj, editing);
+    } else if (cj.is_new && !editing) {
+        add_new_comment_button(cj, cid);
+    } else {
+        add_new_comment(cj, cid);
+        add_comment_sidebar($$(cid), cj);
+        cmt_render(cj, editing);
+        if (cj.response && cj.is_new) {
+            $("#k-comment-actions a[href='#" + cid + "']").closest(".aabut").addClass("hidden");
+        }
+    }
+}
+
+function add_new_comment_button(cj, cid) {
+    var actions = $$("k-comment-actions");
+    if (!actions) {
+        actions = classe("div", "pcard cmtcard", classe("div", "aab aabig"));
+        actions.id = "k-comment-actions";
+        $(".pcontainer").append(actions);
+    }
+    if (!$(actions).find("a[href='#" + cid + "']").length) {
+        var rname = cj.response && (cj.response == "1" ? "response" : cj.response + " response"),
+            $b = $('<div class="aabut"><a href="#'.concat(cid, '" class="uic js-edit-comment btn">Add ', rname || "comment", '</a></div>'));
+        if (cj.response && cj.author_editable === false) {
+            if (!hasClass(actions, "has-fold")) {
+                $(actions).addClass("has-fold foldc").find(".aabig").append('<div class="aabut fn"><button type="button" class="link ui js-foldup ulh need-tooltip" aria-label="Show more comment options">…</button></div>');
+            }
+            $b.addClass("fx").append('<div class="hint">(admin only)</div>');
+        }
+        $b.appendTo($(actions).find(".aabig"));
+    }
+}
+
+function add_new_comment(cj, cid) {
+    var article = classe("article", "pcard cmtcard cmtid".concat(cj.editable ? " editable" : "", cj.response ? " response" : " comment"));
+    article.id = cid;
+    if (cj.response && cj.text !== false) {
+        article.appendChild(classe("header", "cmtcard-head",
+            classe("h2", "", classe("span", "cmtcard-header-name", cj_name(cj)))));
+    }
+    document.querySelector(".pcontainer").insertBefore(article, $$("k-comment-actions"));
+}
+
+function cmt_sidebar_content(item) {
     var a, content;
     if (item.links.length > 1) {
         content = "Comments";
@@ -5791,68 +6973,6 @@ function comment_content_function(item) {
     }
 }
 
-function add_comment(cj, editing) {
-    var cid = cj_cid(cj), celt = $$(cid);
-    cmts[cid] = cj;
-    if (editing == null
-        && cj.response
-        && cj.draft
-        && cj.editable
-        && hotcrp_status.myperm
-        && hotcrp_status.myperm.is_author) {
-        editing = true;
-    }
-    if (celt) {
-        render_comment(cj, editing);
-    } else if (cj.is_new && !editing) {
-        add_new_comment_button(cj, cid);
-    } else {
-        add_new_comment(cj, cid);
-        add_comment_sidebar($$(cid), cj);
-        render_comment(cj, editing);
-        if (cj.response && cj.is_new) {
-            $("#ccactions a[href='#" + cid + "']").closest(".aabut").addClass("hidden");
-        }
-    }
-}
-
-function add_new_comment_button(cj, cid) {
-    var ccactions = $$("ccactions");
-    if (!ccactions) {
-        ccactions = $('<div id="ccactions" class="pcard cmtcard"><div class="aab aabig"></div></div>')[0];
-        $(".pcontainer").append(ccactions);
-    }
-    if (!$(ccactions).find("a[href='#" + cid + "']").length) {
-        var rname = cj.response && (cj.response == "1" ? "response" : cj.response + " response"),
-            $b = $('<div class="aabut"><a href="#'.concat(cid, '" class="uic js-edit-comment btn">Add ', rname || "comment", '</a></div>'));
-        if (cj.response && cj.author_editable === false) {
-            if (!hasClass(ccactions, "has-fold")) {
-                $(ccactions).addClass("has-fold foldc").find(".aabig").append('<div class="aabut fn"><a class="ui js-foldup ulh need-tooltip" aria-label="Show more comment options" href="">…</a></div>');
-            }
-            $b.addClass("fx").append('<div class="hint">(admin only)</div>');
-        }
-        $b.appendTo($(ccactions).find(".aabig"));
-    }
-}
-
-function add_new_comment(cj, cid) {
-    var article = document.createElement("article");
-    article.id = cid;
-    article.className = "pcard cmtcard cmtid".concat(cj.editable ? " editable" : "", cj.response ? " response" : " comment");
-    if (cj.response && cj.text !== false) {
-        var header = document.createElement("header"),
-            h2 = document.createElement("h2"),
-            h2span = document.createElement("span");
-        h2span.className = "cmtcard-header-name";
-        h2span.textContent = cj_name(cj);
-        h2.appendChild(h2span);
-        header.className = "cmtcard-head";
-        header.appendChild(h2);
-        article.appendChild(header);
-    }
-    $(".pcontainer")[0].insertBefore(article, $$("ccactions"));
-}
-
 function add_comment_sidebar(celt, cj) {
     if (!cj.response) {
         var e = celt.previousElementSibling, pslitem;
@@ -5864,16 +6984,24 @@ function add_comment_sidebar(celt, cj) {
             return;
         }
     }
-    navsidebar.set(celt, comment_content_function);
+    navsidebar.set(celt, cmt_sidebar_content);
 }
 
 function edit_this(evt) {
-    edit(find_cj(this));
+    hotcrp.edit_comment(cj_find(this));
     evt.preventDefault();
     handle_ui.stopPropagation(evt);
 }
 
-function edit(cj) {
+
+hotcrp.add_comment = add_comment;
+
+hotcrp.edit_comment = function (cj) {
+    if (typeof cj === "string") {
+        if (!cmts[cj])
+            return;
+        cj = cmts[cj];
+    }
     var cid = cj_cid(cj), elt = $$(cid);
     if (!elt && (cj.is_new || cj.response)) {
         add_comment(cj, true);
@@ -5882,27 +7010,19 @@ function edit(cj) {
     if (!elt && /\beditcomment\b/.test(window.location.search)) {
         return;
     }
-    if (!$(elt).find("form").length) {
-        render_comment(cj, true);
+    if (!elt.querySelector("form")) {
+        cmt_render(cj, true);
     }
-    $(elt).scrollIntoView();
-    var te = $(elt).find("form")[0].elements.text;
-    te.setSelectionRange && te.setSelectionRange(te.value.length, te.value.length);
-    $(function () { te.focus(); });
-    has_unload || $(window).on("beforeunload.papercomment", beforeunload);
+    addClass(elt, "need-focus");
+    setTimeout(function () { cmt_focus(elt); }, editor_observer ? 10 : 1);
+    has_unload || $(window).on("beforeunload.papercomment", cmt_beforeunload);
     has_unload = true;
-}
-
-return {
-    add: add_comment,
-    set_resp_round: function (rname, rinfo) {
-        resp_rounds[rname] = rinfo;
-    },
-    edit: edit,
-    edit_id: function (cid) {
-        cmts[cid] && edit(cmts[cid]);
-    }
 };
+
+hotcrp.set_response_round = function (rname, rinfo) {
+    resp_rounds[rname] = rinfo;
+};
+
 })(jQuery);
 
 handle_ui.on("js-overlong-expand", function () {
@@ -5947,16 +7067,16 @@ handle_ui.on("js-togglepreview", switch_preview);
 function quicklink_shortcut(evt) {
     // find the quicklink, reject if not found
     var key = event_key(evt),
-        a = $$("quicklink-" + (key === "j" ? "prev" : "next"));
+        a = $$("n-" + (key === "j" || key === "[" ? "prev" : "next"));
     if (a && a.focus) {
         // focus (for visual feedback), call callback
         a.focus();
         $ajax.after_outstanding(make_link_callback(a));
         evt.preventDefault();
-    } else if ($$("quicklink-list")) {
+    } else if ($$("n-list")) {
         // at end of list
         a = evt.target;
-        a = (a && a.tagName == "INPUT" ? a : $$("quicklink-list"));
+        a = (a && a.tagName == "INPUT" ? a : $$("n-list"));
         removeClass(a, "flash-error-outline");
         void a.offsetWidth;
         addClass(a, "flash-error-outline");
@@ -5965,7 +7085,7 @@ function quicklink_shortcut(evt) {
 }
 
 function comment_shortcut(evt) {
-    papercomment.edit_id("cnew");
+    hotcrp.edit_comment("cnew");
     if ($$("cnew"))
         evt.preventDefault();
 }
@@ -6006,7 +7126,7 @@ function make_selector_shortcut(type) {
         var e = $$("fold" + type);
         if (e) {
             e.className += " psfocus";
-            foldup.call(e, null, {f: false});
+            foldup.call(e, null, {open: true});
             $(e).scrollIntoView();
             if ((e = find(e))) {
                 focus_at(e);
@@ -6019,7 +7139,7 @@ function make_selector_shortcut(type) {
     }
 }
 
-function shortcut(top_elt) {
+hotcrp.shortcut = function (top_elt) {
     var self, main_keys = {}, current_keys = null, last_key_at = now_msec() - 1000;
 
     function keypress(evt) {
@@ -6079,6 +7199,8 @@ function shortcut(top_elt) {
         } else {
             add("j", quicklink_shortcut);
             add("k", quicklink_shortcut);
+            add("[", quicklink_shortcut);
+            add("]", quicklink_shortcut);
             if (top_elt === document) {
                 add("c", comment_shortcut);
                 add(["s", "d"], make_selector_shortcut("decision"));
@@ -6161,6 +7283,13 @@ demand_load.alltag_info = demand_load.make(function (resolve) {
 
 demand_load.tags = demand_load.make(function (resolve) {
     demand_load.alltag_info().then(function (v) { resolve(v.tags); });
+});
+
+demand_load.mail_templates = demand_load.make(function (resolve) {
+    $.get(hoturl("api/mailtext", {template: "all"}), null, function (v) {
+        var tl = v && v.ok && v.templates;
+        resolve(tl || []);
+    });
 });
 
 (function () {
@@ -6324,7 +7453,7 @@ demand_load.emoji_completion = function (start) {
 })();
 
 
-tooltip.add_builder("votereport", function (info) {
+hotcrp.tooltip.add_builder("votereport", function (info) {
     var pid = $(this).attr("data-pid") || siteinfo.paperid,
         tag = $(this).attr("data-tag");
     if (pid && tag)
@@ -6345,7 +7474,7 @@ function completion_item(c) {
         return {s: c[0], d: c[1]};
     else {
         if (!("s" in c) && "sm1" in c) {
-            c = $.extend({s: c.sm1, reqlen: 1}, c);
+            c = $.extend({s: c.sm1, ml: 1}, c);
             delete c.sm1;
         }
         return c;
@@ -6360,19 +7489,44 @@ function completion_split(elt) {
         return null;
 }
 
+function completion_search_prefix(cinfo, str) {
+    var i, s, case_sensitive = cinfo.case_sensitive, items = cinfo.items;
+    if (!case_sensitive || case_sensitive === "lower") {
+        str = str.toLowerCase();
+    }
+    for (i = 0; i !== items.length; ++i) {
+        s = items[i].s;
+        if (!case_sensitive) {
+            s = s.toLowerCase();
+        }
+        if (s.startsWith(str)) {
+            return items[i];
+        }
+    }
+    return null;
+}
+
 function make_suggestions(precaret, postcaret, options) {
     // The region around the caret is divided into three parts:
     //     ... precaret ^ postcaret options.suffix ...
     // * `precaret`, `postcaret`: Only highlight completion items that start
-    //   with `precaret + postcaret`.
+    //   with `precaret + postcaret`. `precaret + postcaret` is collectively
+    //   called the match region.
     // * `options.suffix`: After successful completion, caret skips over this.
-    // `precaret + postcaret` is collectively called the match region.
     //
     // Other options:
-    // * `options.case_sensitive`: If truthy, match is case sensitive.
-    // * `options.reqlen`: Integer. Ignore completion items that don’t
-    //    match the first `reqlen` characters of the match region.
+    // * `options.case_sensitive`: If falsy (default), then matches are case
+    //   insensitive. If truthy, then matches are case sensitive (match region
+    //   "A" will not match completion item "a"). If `"lower"`, then matches
+    //   are case insensitive, but all completion items are assumed to be
+    //   lower-case.
+    // * `options.ml`: Integer. Ignore completion items that don’t
+    //    match the first `ml` characters of the match region.
     // * `options.prefix`: Show this before each item.
+    // * `options.max_items`: Maximum number of completion items to show.
+    // * `options.limit_replacement`: When completion succeeds, limit the
+    //   characters replaced in the input to the edit region and any following
+    //   characters that match.
     //
     // Completion items:
     // * `item.s`: Completion string -- mandatory.
@@ -6380,25 +7534,36 @@ function make_suggestions(precaret, postcaret, options) {
     // * `item.d`: Description text.
     // * `item.dh`: Description HTML.
     // * `item.r`: Replacement text (defaults to `item.s`).
-    // * `item.reqlen`: Integer. Ignore this item if it doesn’t match
-    //   the first `item.reqlen` characters of the match region.
+    // * `item.ml`: Integer. Ignore this item if it doesn’t match
+    //   the first `item.ml` characters of the match region.
     // Shorthand:
     // * A string `item` sets `item.s`.
     // * A two-element array `item` sets `item.s` and `item.d`, respectively.
-    // * A `item.sm1` component sets `item.s = item.sm1` and `item.reqlen = 1`.
+    // * A `item.sm1` component sets `item.s = item.sm1` and `item.ml = 1`.
+    //
+    // Return value:
+    // * Extends `options`.
+    // * `items`: List of matching items.
+    // * `best`: Index of best item in `items`.
+    // * `lengths`: [precaret.length, postcaret.length, options.suffix.length].
+    // Set externally:
+    // * `startpos`: Precaret position.
+    // * `editlength`: Minimum postcaret length over this completion session.
 
     options = options || {};
 
     var case_sensitive = options.case_sensitive,
         lregion = precaret + postcaret;
-    lregion = case_sensitive ? lregion : lregion.toLowerCase();
+    if (!case_sensitive || case_sensitive === "lower")
+        lregion = lregion.toLowerCase();
     if (options.region_trimmer)
         lregion = lregion.replace(options.region_trimmer, "");
-    if (options.case_sensitive_items != null)
-        case_sensitive = options.case_sensitive_items;
-    if (options.reqlen > lregion.length)
-        return [];
-    var filter = options.reqlen ? lregion.substr(0, options.reqlen) : null,
+    if (options.ml > lregion.length) {
+        return function (/*tlist*/) {
+            return null;
+        };
+    }
+    var filter = options.ml ? lregion.substr(0, options.ml) : null,
         lengths = [precaret.length, postcaret.length, (options.suffix || "").length];
 
     return function (tlist) {
@@ -6410,7 +7575,7 @@ function make_suggestions(precaret, postcaret, options) {
             titem = completion_item(tlist[i]);
             text = titem.s;
             ltext = case_sensitive ? text : text.toLowerCase();
-            rl = titem.reqlen || 0;
+            rl = titem.ml || 0;
 
             if ((filter === null || ltext.startsWith(filter))
                 && (rl === 0
@@ -6438,13 +7603,11 @@ function make_suggestions(precaret, postcaret, options) {
             }
         }
 
-        if (res.length) {
-            return $.extend({list: res, lengths: lengths, best: best}, options);
-        }
+        return res.length ? $.extend({items: res, lengths: lengths, best: best}, options) : null;
     };
 }
 
-var suggest = (function () {
+hotcrp.suggest = (function () {
 var builders = {}, punctre;
 try {
     punctre = new RegExp("^(?!@)[\\p{Po}\\p{Pd}\\p{Pe}\\p{Pf}]$", "u");
@@ -6455,14 +7618,19 @@ try {
 function suggest() {
     var elt = this, suggdata,
         hintdiv, hintinfo, blurring = false, hiding = false,
-        wasnav = 0, spacestate = -1, wasmouse = null;
+        wasnav = 0, spacestate = -1, wasmouse = null, autocomplete = null;
 
-    function kill() {
+    function kill(success) {
         hintdiv && hintdiv.remove();
         hintdiv = hintinfo = wasmouse = null;
         blurring = hiding = false;
         wasnav = 0;
-        spacestate = -1;
+        if (!success)
+            spacestate = -1;
+        if (autocomplete !== null) {
+            elt.autocomplete = autocomplete;
+            autocomplete = null;
+        }
     }
 
     function render_item(titem, prepend) {
@@ -6498,8 +7666,10 @@ function suggest() {
     }
 
     function finish_display(cinfo) {
-        if (!cinfo || !cinfo.list.length)
-            return kill();
+        if (!cinfo || !cinfo.items.length) {
+            kill();
+            return;
+        }
         var caretpos = elt.selectionStart,
             precaretpos = caretpos - cinfo.lengths[0];
         if (hiding && hiding === elt.value.substring(precaretpos, caretpos))
@@ -6514,17 +7684,21 @@ function suggest() {
             wasmouse = 0;
         }
 
-        var i, clist = cinfo.list, same_list = false;
-        if (hintinfo && hintinfo.list && hintinfo.list.length === clist.length) {
+        var i, clist = cinfo.items, same_list = false;
+        cinfo.startpos = precaretpos;
+        if (hintinfo && hintinfo.items && hintinfo.items.length === clist.length) {
             for (same_list = true, i = 0; i !== clist.length; ++i) {
-                if (hintinfo.list[i] !== clist[i]) {
+                if (hintinfo.items[i] !== clist[i]) {
                     same_list = false;
                     break;
                 }
             }
         }
+        cinfo.editlength = cinfo.lengths[1];
+        if (hintinfo && hintinfo.startpos === cinfo.startpos && hintinfo.editlength < cinfo.editlength) {
+            cinfo.editlength = hintinfo.editlength;
+        }
         hintinfo = cinfo;
-        hintinfo.pcpos = precaretpos;
 
         var div;
         if (!same_list) {
@@ -6544,18 +7718,18 @@ function suggest() {
             div = hintdiv.content_node().firstChild;
             $(div).find(".s9y").removeClass("s9y");
         }
-        if (cinfo.best !== null)
+        if (cinfo.best !== null) {
             addClass(div.childNodes[cinfo.best], "s9y");
-        if (cinfo.smart_punctuation)
-            addClass(div, "s9smartpunc");
+        }
 
         var $elt = jQuery(elt),
             shadow = textarea_shadow($elt, elt.tagName === "INPUT" ? 2000 : 0),
             positionpos = precaretpos;
         if (cinfo.prefix
             && positionpos >= cinfo.prefix.length
-            && elt.value.substring(positionpos - cinfo.prefix.length, positionpos) === cinfo.prefix)
+            && elt.value.substring(positionpos - cinfo.prefix.length, positionpos) === cinfo.prefix) {
             positionpos -= cinfo.prefix.length;
+        }
         shadow.text(elt.value.substring(0, positionpos))
             .append("<span>&#x2060;</span>")
             .append(document.createTextNode(elt.value.substring(positionpos)));
@@ -6563,6 +7737,10 @@ function suggest() {
         $pos = geometry_translate($pos, -soff.left - $elt.scrollLeft(), -soff.top + 4 - $elt.scrollTop());
         hintdiv.near($pos, elt);
         shadow.remove();
+        if (autocomplete === null) {
+            autocomplete = elt.autocomplete;
+            elt.autocomplete = "off";
+        }
     }
 
     function display() {
@@ -6572,7 +7750,7 @@ function suggest() {
             if (cinfo || i == suggdata.promises.length)
                 finish_display(cinfo);
             else {
-                var result = suggdata.promises[i](elt);
+                var result = suggdata.promises[i](elt, hintinfo);
                 if (result && $.isFunction(result.then))
                     result.then(next);
                 else
@@ -6596,29 +7774,33 @@ function suggest() {
         }
 
         var val = elt.value,
-            startPos = hintinfo.pcpos,
-            endPos = startPos + hintinfo.lengths[0] + hintinfo.lengths[1] + hintinfo.lengths[2],
-            space;
-        if (hintinfo.lengths[2])
-            repl += val.substring(endPos - hintinfo.lengths[2], endPos);
-        else if ((space = repl.indexOf(" ")) > 0) {
-            // If user completes when caret is at e.g. `Jor|dan Peele`, skip over `Peele`
-            while (space < repl.length && val.charCodeAt(endPos) === repl.charCodeAt(space))
-                ++space, ++endPos;
+            startPos = hintinfo.startpos,
+            endPos = startPos + hintinfo.lengths[0] + hintinfo.lengths[1],
+            sfxLen = hintinfo.lengths[2];
+        if (sfxLen) {
+            repl += val.substring(endPos, endPos + sfxLen);
+            endPos += sfxLen;
+        }
+        if (hintinfo.limit_replacement) {
+            endPos -= hintinfo.editlength;
+            while (endPos - startPos < repl.length && val.charCodeAt(endPos) === repl.charCodeAt(endPos - startPos)) {
+                ++endPos;
+            }
         }
         var outPos = startPos + repl.length;
         if (hasClass(complete_elt, "s9nsp")) {
             spacestate = -1;
         } else {
             ++outPos;
-            if (endPos === val.length || /\S/.test(val.charAt(endPos)))
-                repl += " ";
-            spacestate = complete_elt.closest(".s9smartpunc") ? outPos : -1;
+            repl += " ";
+            spacestate = hintinfo.smart_punctuation ? outPos : -1;
         }
         elt.setRangeText(repl, startPos, endPos, "end");
         if (hintinfo.postreplace)
             hintinfo.postreplace(elt, repl, startPos);
         $(elt).trigger("input");
+
+        kill(true);
     }
 
     function move_active(k) {
@@ -6633,8 +7815,8 @@ function suggest() {
             else
                 return false;
         } else if (k === "ArrowUp" || k === "ArrowDown") {
-            for (pos = 0; pos !== $sug.length - 1 && $sug[pos] !== $active[0]; ++pos)
-                /* nada */;
+            for (pos = 0; pos !== $sug.length - 1 && $sug[pos] !== $active[0]; ++pos) {
+            }
             pos += k === "ArrowDown" ? 1 : -1;
         } else if ((k === "ArrowLeft" && wasnav > 0)
                    || (k === "ArrowRight" && (wasnav > 0 || elt.selectionEnd === elt.value.length))) {
@@ -6677,16 +7859,14 @@ function suggest() {
             pspacestate = spacestate;
         if (k === "Escape" && !m) {
             if (hintinfo) {
-                hiding = this.value.substring(hintinfo.pcpos, hintinfo.pcpos + hintinfo.lengths[0]);
+                hiding = this.value.substring(hintinfo.startpos, hintinfo.startpos + hintinfo.lengths[0]);
                 kill();
                 evt.preventDefault();
                 handle_ui.stopImmediatePropagation(evt);
             }
         } else if ((k === "Tab" || k === "Enter") && !m && hintdiv) {
             var $active = hintdiv.self().find(".s9y");
-            if ($active.length)
-                do_complete($active[0]);
-            kill();
+            $active.length ? do_complete($active[0]) : kill();
             if ($active.length || this.selectionEnd !== this.value.length) {
                 evt.preventDefault();
                 handle_ui.stopImmediatePropagation(evt);
@@ -6698,7 +7878,7 @@ function suggest() {
                 && event_key.printable(evt)
                 && elt.selectionStart === elt.selectionEnd
                 && elt.selectionStart === pspacestate
-                && elt.value[pspacestate - 1] === " "
+                && elt.value.charCodeAt(pspacestate - 1) === 32
                 && punctre.test(k)) {
                 elt.setRangeText(k, pspacestate - 1, pspacestate, "end");
                 evt.preventDefault();
@@ -6715,7 +7895,6 @@ function suggest() {
 
     function click(evt) {
         do_complete(this);
-        kill();
         handle_ui.stopPropagation(evt);
     }
 
@@ -6744,7 +7923,6 @@ function suggest() {
         suggdata = {promises: []};
         $.data(elt, "suggest", suggdata);
         $(elt).on("keydown", kp).on("blur", blur);
-        elt.autocomplete = "off";
     }
     $.each(classList(elt), function (i, c) {
         if (builders[c] && $.inArray(builders[c], suggdata.promises) < 0)
@@ -6760,7 +7938,7 @@ suggest.add_builder = function (name, f) {
 return suggest;
 })();
 
-suggest.add_builder("tags", function (elt) {
+hotcrp.suggest.add_builder("tags", function (elt) {
     var x = completion_split(elt), m, n;
     if (x && (m = x[0].match(/(?:^|\s)(#?)([^#\s]*)$/))) {
         n = x[1].match(/^([^#\s]*)((?:#[-+]?(?:\d+\.?|\.\d)\d*)?)/);
@@ -6768,7 +7946,7 @@ suggest.add_builder("tags", function (elt) {
     }
 });
 
-suggest.add_builder("editable-tags", function (elt) {
+hotcrp.suggest.add_builder("editable-tags", function (elt) {
     var x = completion_split(elt), m, n;
     if (x && (m = x[0].match(/(?:^|\s)(#?)([^#\s]*)$/))) {
         n = x[1].match(/^([^#\s]*)((?:#[-+]?(?:\d+\.?|\.\d)\d*)?)/);
@@ -6776,7 +7954,7 @@ suggest.add_builder("editable-tags", function (elt) {
     }
 });
 
-suggest.add_builder("sitewide-editable-tags", function (elt) {
+hotcrp.suggest.add_builder("sitewide-editable-tags", function (elt) {
     var x = completion_split(elt), m, n;
     if (x && (m = x[0].match(/(?:^|\s)(#?)([^#\s]*)$/))) {
         n = x[1].match(/^([^#\s]*)((?:#[-+]?(?:\d+\.?|\.\d)\d*)?)/);
@@ -6784,18 +7962,18 @@ suggest.add_builder("sitewide-editable-tags", function (elt) {
     }
 });
 
-suggest.add_builder("papersearch", function (elt) {
+hotcrp.suggest.add_builder("papersearch", function (elt) {
     var x = completion_split(elt), m, n;
     if (x && (m = x[0].match(/.*?(?:^|[^\w:])((?:tag|r?order):\s*#?|#|(?:show|hide):\s*(?:#|tag:|tagval:|tagvalue:))([^#\s()]*)$/))) {
         n = x[1].match(/^([^#\s()]*)/);
         return demand_load.tags().then(make_suggestions(m[2], n[1], {prefix: m[1]}));
     } else if (x && (m = x[0].match(/.*?\b((?:[A-Za-z0-9]{3,10}):(?:[^"\s()]*|"[^"]*))$/))) {
         n = x[1].match(/^([^\s()]*)/);
-        return demand_load.search_completion().then(make_suggestions(m[1], n[1], {reqlen: m[1].indexOf(":") + 1}));
+        return demand_load.search_completion().then(make_suggestions(m[1], n[1], {ml: m[1].indexOf(":") + 1}));
     }
 });
 
-suggest.add_builder("pc-tags", function (elt) {
+hotcrp.suggest.add_builder("pc-tags", function (elt) {
     var x = completion_split(elt), m, n;
     if (x && (m = x[0].match(/(?:^|\s)(#?)([^#\s]*)$/))) {
         n = x[1].match(/^(\S*)/);
@@ -6813,23 +7991,33 @@ function suggest_emoji_postreplace(elt, repl, startPos) {
     }
 }
 
-suggest.add_builder("suggest-emoji", function (elt) {
+hotcrp.suggest.add_builder("suggest-emoji", function (elt) {
     /* eslint-disable no-misleading-character-class */
     var x = completion_split(elt), m;
     if (x && (m = x[0].match(/(?:^|[\s(\u20e3-\u23ff\u2600-\u27ff\ufe0f\udc00-\udfff]):((?:|\+|\+?[-_0-9a-zA-Z]+):?)$/))
         && /^(?:$|[\s)\u20e3-\u23ff\u2600-\u27ff\ufe0f\ud83c-\ud83f])/.test(x[1])) {
-        return demand_load.emoji_completion(m[1].toLowerCase()).then(make_suggestions(":" + m[1], "", {case_sensitive_items: true, max_items: 8, postreplace: suggest_emoji_postreplace}));
+        return demand_load.emoji_completion(m[1].toLowerCase()).then(make_suggestions(":" + m[1], "", {case_sensitive: "lower", max_items: 8, postreplace: suggest_emoji_postreplace}));
     }
     /* eslint-enable no-misleading-character-class */
 });
 
-suggest.add_builder("mentions", function (elt) {
-    var x = completion_split(elt), m, n;
-    if (x && (m = x[0].match(/(?:^|[-+,;\s–—])@(|\p{L}(?:[\p{L}\p{M}\p{N}]|[-.](?=\p{L}))*)$/u))) {
-        n = x[1].match(/^(?:[\p{L}\p{M}\p{N}]|[-.](?=\p{L}))*/u);
-        return demand_load.mentions().then(make_suggestions(m[1], n[0], {prefix: "@", reqlen: Math.min(2, m[1].length), smart_punctuation: true}));
-    } else
+hotcrp.suggest.add_builder("mentions", function (elt, hintinfo) {
+    var x = completion_split(elt), precaret, m;
+    if (!x) {
         return null;
+    }
+    if (hintinfo
+        && hintinfo.startpos < x[0].length - 1
+        && x[0].charCodeAt(hintinfo.startpos - 1) === 0x40
+        && completion_search_prefix(hintinfo, x[0].substring(hintinfo.startpos))) {
+        precaret = x[0].substring(hintinfo.startpos);
+    } else if ((m = x[0].match(/(?:^|[-+,:;\s–—([{/])@(|\p{L}(?:[\p{L}\p{M}\p{N}]|[-.](?=\p{L}))*)$/u))) {
+        precaret = m[1];
+    } else {
+        return null;
+    }
+    m = x[1].match(/^(?:[\p{L}\p{M}\p{N}]|[-.](?=\p{L}))*/u);
+    return demand_load.mentions().then(make_suggestions(precaret, m[0], {prefix: "@", ml: Math.min(2, precaret.length), smart_punctuation: true, limit_replacement: true}));
 });
 
 
@@ -6955,7 +8143,7 @@ Hotlist = function (s) {
     this.obj = null;
     if (this.str && this.str.charAt(0) === "{") {
         try {
-            this.obj = parse_json(this.str);
+            this.obj = JSON.parse(this.str);
         } catch (e) {
         }
     }
@@ -7055,7 +8243,7 @@ function unload_list() {
         set_cookie(hl);
 }
 function row_click(evt) {
-    if (!hasClass(this.parentElement, "pltable")
+    if (!hasClass(this.parentElement, "pltable-tbody")
         || evt.target.closest("a, input, textarea, select, button"))
         return;
     var td = evt.target.closest("td");
@@ -7075,7 +8263,7 @@ function row_click(evt) {
         if (event_key.is_default_a(evt)) {
             window.location = href;
         } else {
-            window.open(href, "_blank");
+            window.open(href, "_blank", "noopener");
             window.focus();
         }
     }
@@ -7084,7 +8272,7 @@ function row_click(evt) {
 handle_ui.on("js-edit-comment", function (evt) {
     if (this.tagName !== "A" || event_key.is_default_a(evt)) {
         evt.preventDefault();
-        papercomment.edit_id(this.hash.substring(1));
+        hotcrp.edit_comment(this.hash.substring(1));
     }
 });
 
@@ -7109,7 +8297,7 @@ function default_click(evt) {
 
 $(document).on("click", "a", function (evt) {
     if (hasClass(this, "fn5")) {
-        foldup.call(this, evt, {n: 5, f: false});
+        foldup.call(this, evt, {n: 5, open: true});
     } else if (!hasClass(this, "ui")) {
         if (!event_key.is_default_a(evt)
             || this.target
@@ -7136,12 +8324,12 @@ $(function () {
     }
     // having resolved digests, insert quicklinks
     if (siteinfo.paperid
-        && !$$("quicklink-prev")
-        && !$$("quicklink-next")) {
+        && !$$("n-prev")
+        && !$$("n-next")) {
         $(".quicklinks").each(function () {
             var info = Hotlist.at(this.closest(".has-hotlist")), ids, pos, page, mode;
             try {
-                mode = parse_json(this.getAttribute("data-link-params") || "{}");
+                mode = JSON.parse(this.getAttribute("data-link-params") || "{}");
             } catch (e) {
                 mode = {};
             }
@@ -7151,11 +8339,11 @@ $(function () {
                 && (pos = $.inArray(siteinfo.paperid, ids)) >= 0) {
                 if (pos > 0) {
                     mode.p = ids[pos - 1];
-                    $(this).prepend('<a id="quicklink-prev" class="ulh" href="'.concat(hoturl_html(page, mode), '">&lt; #', ids[pos - 1], '</a> '));
+                    $(this).prepend('<a id="n-prev" class="ulh" href="'.concat(hoturl_html(page, mode), '">&lt; #', ids[pos - 1], '</a> '));
                 }
                 if (pos < ids.length - 1) {
                     mode.p = ids[pos + 1];
-                    $(this).append(' <a id="quicklink-next" class="ulh" href="'.concat(hoturl_html(page, mode), '">#', ids[pos + 1], ' &gt;</a>'));
+                    $(this).append(' <a id="n-next" class="ulh" href="'.concat(hoturl_html(page, mode), '">#', ids[pos + 1], ' &gt;</a>'));
                 }
             }
         });
@@ -7192,76 +8380,74 @@ function hotlist_search_params(x, ids) {
 
 
 // review preferences
-var add_revpref_ajax = (function () {
-    var blurred_at = 0;
+(function () {
+var blurred_at = 0;
 
-    function rp(selector, on_unload) {
-        var $e = $(selector);
-        if ($e.is("input")) {
-            var rpf = wstorage.site(true, "revpref_focus");
-            if (rpf && now_msec() - rpf < 3000)
-                focus_at($e[0]);
-            $e = $e.parent();
-        }
-        $e.off(".revpref_ajax")
-            .on("blur.revpref_ajax", "input.revpref", rp_blur)
-            .on("change.revpref_ajax", "input.revpref", rp_change)
-            .on("keydown.revpref_ajax", "input.revpref", make_onkey("Enter", rp_change));
-        if (on_unload) {
-            $(window).on("beforeunload", rp_unload);
+hotcrp.add_preference_ajax = function (selector, on_unload) {
+    var $e = $(selector);
+    if ($e.is("input")) {
+        var rpf = wstorage.site(true, "revpref_focus");
+        if (rpf && now_msec() - rpf < 3000)
+            focus_at($e[0]);
+        $e = $e.parent();
+    }
+    $e.off(".revpref_ajax")
+        .on("blur.revpref_ajax", "input.revpref", rp_blur)
+        .on("change.revpref_ajax", "input.revpref", rp_change)
+        .on("keydown.revpref_ajax", "input.revpref", make_onkey("Enter", rp_change));
+    if (on_unload) {
+        $(window).on("beforeunload", rp_unload);
+    }
+};
+
+function rp_blur() {
+    blurred_at = now_msec();
+}
+
+function rp_change() {
+    var self = this, pid = this.name.substr(7), data = {pref: self.value}, pos;
+    if ((pos = pid.indexOf("u")) > 0) {
+        data.u = pid.substr(pos + 1);
+        pid = pid.substr(0, pos);
+    }
+    function success(rv) {
+        minifeedback(self, rv);
+        if (rv && rv.ok && rv.value != null) {
+            self.value = rv.value === "0" ? "" : rv.value;
+            input_set_default_value(self, self.value);
         }
     }
-
-    function rp_blur() {
-        blurred_at = now_msec();
-    }
-
-    function rp_change() {
-        var self = this, pid = this.name.substr(7), data = {pref: self.value}, pos;
-        if ((pos = pid.indexOf("u")) > 0) {
-            data.u = pid.substr(pos + 1);
-            pid = pid.substr(0, pos);
-        }
-        function success(rv) {
-            minifeedback(self, rv);
-            if (rv && rv.ok && rv.value != null) {
-                self.value = rv.value === "0" ? "" : rv.value;
-                input_set_default_value(self, self.value);
-            }
-        }
-        $ajax.condition(function () {
-            $.ajax(hoturl("=api/revpref", {p: pid}), {
-                method: "POST", data: data,
-                success: success, trackOutstanding: true
-            });
+    $ajax.condition(function () {
+        $.ajax(hoturl("=api/revpref", {p: pid}), {
+            method: "POST", data: data,
+            success: success, trackOutstanding: true
         });
-    }
-
-    function rp_unload() {
-        if ((blurred_at && now_msec() - blurred_at < 1000)
-            || $(":focus").is("input.revpref"))
-            wstorage.site(true, "revpref_focus", blurred_at || now_msec());
-    }
-
-    handle_ui.on("revpref", function (evt) {
-        if (evt.type === "keydown") {
-            if (!event_modkey(evt) && event_key(evt) === "Enter") {
-                rp_change.call(this);
-                evt.preventDefault();
-                handle_ui.stopImmediatePropagation(evt);
-            }
-        } else if (evt.type === "change")
-            rp_change.call(this, evt);
     });
+}
 
-    return rp;
+function rp_unload() {
+    if ((blurred_at && now_msec() - blurred_at < 1000)
+        || $(":focus").is("input.revpref"))
+        wstorage.site(true, "revpref_focus", blurred_at || now_msec());
+}
+
+handle_ui.on("revpref", function (evt) {
+    if (evt.type === "keydown") {
+        if (event_key.is_submit_enter(evt, true)) {
+            rp_change.call(this);
+            evt.preventDefault();
+            handle_ui.stopImmediatePropagation(evt);
+        }
+    } else if (evt.type === "change")
+        rp_change.call(this, evt);
+});
 })();
 
 
 var paperlist_tag_ui = (function () {
 
 function tag_canonicalize(tag) {
-    return tag && /^~[^~]/.test(tag) ? siteinfo.user.cid + tag : tag;
+    return tag && /^~[^~]/.test(tag) ? siteinfo.user.uid + tag : tag;
 }
 
 function tagvalue_parse(s) {
@@ -7293,7 +8479,7 @@ function row_tagvalue(row, tag) {
 
 
 function tagannorow_fill(row, anno) {
-    if (!anno.empty) {
+    if (!anno.blank) {
         if (anno.tag && anno.annoid) {
             row.setAttribute("data-tags", anno.tag + "#" + anno.tagval);
         } else {
@@ -7316,7 +8502,7 @@ function tagannorow_add(tbl, tbody, before, anno) {
             titlecol = i;
 
     var h;
-    if (anno.empty)
+    if (anno.blank)
         h = '<tr class="plheading-blank"><td class="plheading" colspan="' + ncol + '"></td></tr>';
     else {
         h = '<tr class="plheading"';
@@ -7440,23 +8626,48 @@ function same_ids(tbl, ids) {
     return tbl_ids.join(" ") === ids.join(" ");
 }
 
+function foldpl_active_sorter() {
+    var s = "";
+    $("#foldpl").children("thead").find("th[aria-sort]").each(function () {
+        s = this.getAttribute("data-pc");
+        if (this.ariaSort !== this.getAttribute("data-pc-sort"))
+            s += this.ariaSort === "ascending" ? " asc" : " desc";
+    });
+    return s;
+}
+
+function current_sort_location() {
+    var h = hoturl_set(window.location.href, "sort", foldpl_active_sorter()), e;
+    if ((e = document.getElementById("scoresort")))
+        h = hoturl_set(h, "scoresort", e.value);
+    if ((e = document.getElementById("showforce")))
+        h = hoturl_set(h, "forceShow", e.checked ? 1 : null);
+    return h;
+}
+
 function href_sorter(href, newval) {
-    var re = /^([^#]*[?&;]sort=)([^=&;#]*)(.*)$/,
-        m = re.exec(href);
     if (newval == null) {
+        var re = /^([^#]*[?&;]sort=)([^=&;#]*)(.*)$/,
+            m = re.exec(href);
         return m ? urldecode(m[2]) : null;
-    } else if (m) {
-        return m[1] + urlencode(newval) + m[3];
     } else {
-        return hoturl_add(href, "sort=" + urlencode(newval));
+        return hoturl_set(href, "sort", newval);
     }
 }
 
-function sorter_toggle_reverse(sorter, toggle) {
-    var xsorter = sorter.replace(/[ +]+(?:reverse|down)\b/, "");
-    if (toggle == null)
-        toggle = xsorter == sorter;
-    return xsorter + (toggle ? " down" : "");
+function sorter_analyze(sorter) {
+    var m = sorter.match(/^(.*)[ +]+(asc(?:ending|)|desc(?:ending|)|up|down|reverse|forward)\b(.*)$/), dir = null;
+    if (m) {
+        sorter = m[1] + m[3];
+        if (m[2] === "asc" || m[2] === "ascending" || m[2] === "up") {
+            dir = "ascending";
+        } else if (m[2] === "desc" || m[2] === "descending" || m[2] === "down") {
+            dir = "descending";
+        } else if (m[2] === "reverse") {
+            dir = "reverse";
+        }
+    }
+    return {s: sorter, d: dir};
 }
 
 function search_sort_success(tbl, data_href, data) {
@@ -7472,23 +8683,33 @@ function search_sort_success(tbl, data_href, data) {
         tbl.removeAttribute("data-groups");
     tbl.setAttribute("data-hotlist", data.hotlist || "");
     var want_sorter = data.fwd_sorter || href_sorter(data_href) || "id",
-        want_fwd_sorter = want_sorter && sorter_toggle_reverse(want_sorter, false);
-    var $sorters = $(tbl).children("thead").find("a.pl_sort");
-    $sorters.removeClass("pl_sorting_fwd pl_sorting_rev")
-        .each(function () {
-            var href = this.getAttribute("href"),
-                sorter = sorter_toggle_reverse(href_sorter(href), false);
-            if (sorter === want_fwd_sorter) {
-                var reversed = want_sorter !== want_fwd_sorter;
-                if (reversed)
-                    $(this).addClass("pl_sorting_rev");
-                else {
-                    $(this).addClass("pl_sorting_fwd");
-                    sorter = sorter_toggle_reverse(sorter, true);
-                }
+        sortanal = sorter_analyze(want_sorter);
+    $(tbl).children("thead").find("th.sortable").each(function () {
+        var defdir, a, pc = this.getAttribute("data-pc");
+        if (this.hasAttribute("aria-sort")) {
+            this.removeAttribute("aria-sort");
+            removeClass(this, "sort-ascending");
+            removeClass(this, "sort-descending");
+            a = this.querySelector("a.pl_sort");
+        }
+        if (this.getAttribute("data-pc") === sortanal.s) {
+            defdir = this.getAttribute("data-pc-sort");
+            if (sortanal.d === "reverse") {
+                sortanal.d = defdir === "ascending" ? "descending" : "ascending";
             }
-            this.setAttribute("href", href_sorter(href, sorter));
-        });
+            sortanal.d = sortanal.d || defdir;
+            this.setAttribute("aria-sort", sortanal.d);
+            addClass(this, "sort-" + sortanal.d);
+            a = a || this.querySelector("a.pl_sort");
+        }
+        if (a) {
+            var pcx = pc;
+            if (defdir && defdir === sortanal.d) {
+                pcx += sortanal.d === "ascending" ? " desc" : " asc";
+            }
+            a.setAttribute("href", href_sorter(a.getAttribute("href"), pcx));
+        }
+    });
     var form = tbl.closest("form");
     if (form) {
         var action;
@@ -7508,13 +8729,10 @@ $(document).on("collectState", function (evt, state) {
         return;
     var data = state.sortpl = {hotlist: tbl.getAttribute("data-hotlist")};
     var groups = tbl.getAttribute("data-groups");
-    if (groups && (groups = parse_json(groups)) && groups.length)
+    if (groups && (groups = JSON.parse(groups)) && groups.length)
         data.groups = groups;
-    if (!href_sorter(state.href)) {
-        var active_href = $(tbl).children("thead").find("a.pl_sorting_fwd").attr("href");
-        if (active_href && (active_href = href_sorter(active_href)))
-            data.fwd_sorter = sorter_toggle_reverse(active_href, false);
-    }
+    if (!href_sorter(state.href))
+        data.fwd_sorter = foldpl_active_sorter();
 });
 
 function search_sort_url(self, href) {
@@ -7523,6 +8741,9 @@ function search_sort_url(self, href) {
     if ((e = document.getElementById("showforce"))) {
         var v = e.type === "checkbox" ? (e.checked ? 1 : 0) : e.value;
         api = api.replace(/&forceShow=[^&#;]*/, "") + "&forceShow=" + v;
+    }
+    if ((e = document.getElementById("scoresort"))) {
+        api = api.replace(/&scoresort=[^&#;]*/, "") + "&scoresort=" + e.value;
     }
     if (!/[&?]q=/.test(api)) {
         api += "&q=";
@@ -7553,19 +8774,8 @@ function search_sort_click(evt) {
 }
 
 function search_scoresort_change() {
-    var scoresort = $(this).val(),
-        re = / (?:counts|average|median|variance|maxmin|my)\b/;
-    $.post(hoturl("=api/session"), {v: "scoresort=" + scoresort});
-    plinfo.set_scoresort(scoresort);
-    $("#foldpl > thead").find("a.pl_sort").each(function () {
-        var href = this.getAttribute("href"), sorter = href_sorter(href);
-        if (re.test(sorter)) {
-            sorter = sorter.replace(re, " " + scoresort);
-            this.setAttribute("href", href_sorter(href, sorter));
-            if (/\bpl_sorting_(?:fwd|rev)/.test(this.className))
-                search_sort_url(this, href_sorter(href, sorter_toggle_reverse(sorter)));
-        }
-    });
+    $.post(hoturl("=api/session"), {v: "scoresort=" + this.value});
+    search_sort_url($("#foldpl"), current_sort_location());
     return false;
 }
 
@@ -7577,17 +8787,11 @@ function search_showforce_click() {
             href = href.replace(/^([^#]*?)(#.*|)$/, "$1&forceShow=1$2");
         return href;
     }
-    var xhref = apply_force(window.location.href);
-    $("#foldpl > thead").find("a.pl_sort").each(function () {
-        var href = apply_force(this.getAttribute("href"));
-        this.setAttribute("href", href);
-        if (/\bpl_sorting_(?:fwd|rev)/.test(this.className)
-            && !$(this).closest("th").hasClass("pl_id")) {
-            var sorter = href_sorter(href);
-            xhref = href_sorter(href, sorter_toggle_reverse(sorter));
-        }
+    $("#foldpl > thead").find("th.sortable").each(function () {
+        var a = this.querySelector("a.pl_sort");
+        a && a.setAttribute("href", apply_force(a.getAttribute("href")));
     });
-    search_sort_url($("#foldpl"), xhref);
+    search_sort_url($("#foldpl"), current_sort_location());
 }
 
 if ("pushState" in window.history) {
@@ -7608,7 +8812,7 @@ function add_draghandle() {
     removeClass(this, "need-draghandle");
     var x = document.createElement("span");
     x.className = "draghandle js-drag-tag";
-    x.setAttribute("title", "Drag to change order");
+    x.title = "Drag to change order";
     if (this.tagName === "TD") {
         x.style.float = "right";
         x.style.position = "static";
@@ -7678,7 +8882,7 @@ function make_gapf() {
 function taganno_success(rv) {
     if (!rv.ok)
         return;
-    $("table.pltable").each(function () {
+    $(".pltable").each(function () {
         if (this.getAttribute("data-order-tag") !== rv.tag)
             return;
         var groups = [], cur = this.tBodies[0].firstChild, pos = 0, annoi = 0;
@@ -7712,10 +8916,12 @@ handle_ui.on("js-annotate-order", function () {
         if (this.name === "add") {
             var hc = new HtmlCollector;
             add_anno(hc, {});
-            var $row = $(hc.render());
+            var $row = $(hc.render()).awaken();
             $row.appendTo($d.find(".tagannos"));
             $d.find(".modal-dialog").scrollIntoView({atBottom: true, marginBottom: "auto"});
             $row.find("input[name='legend_n" + last_newannoid + "']").focus();
+        } else if (hasClass(this, "delete-link")) {
+            ondeleteclink.call(this, evt);
         } else {
             var anno = [];
             for (var i = 0; i < annos.length; ++i) {
@@ -7742,10 +8948,8 @@ handle_ui.on("js-annotate-order", function () {
         $div.find("input[name='tagval_" + annoid + "']").after("[deleted]").remove();
         $div.append(hidden_input("deleted_" + annoid, "1"));
         $div.find("input[name='legend_" + annoid + "']").prop("disabled", true);
-        tooltip.erase.call(this);
+        hotcrp.tooltip.close(this);
         $(this).remove();
-        evt.preventDefault();
-        handle_ui.stopPropagation(evt);
     }
     function make_onsave($d) {
         return function (rv) {
@@ -7761,16 +8965,16 @@ handle_ui.on("js-annotate-order", function () {
         if (annoid == null)
             annoid = "n" + (last_newannoid += 1);
         hc.push('<div class="form-g" data-anno-id="' + annoid + '">', '</div>');
-        hc.push('<div class="entryi"><label for="htctl-taganno-' + annoid + '-d">Legend</label><input id="htctl-taganno-' + annoid + '-d" name="legend_' + annoid + '" type="text" placeholder="none" size="32" class="need-autogrow"></div>');
-        hc.push('<div class="entryi"><label for="htctl-taganno-' + annoid + '-tagval">Tag value</label><div class="entry"><input id="htctl-taganno-' + annoid + '-tagval" name="tagval_' + annoid + '" type="text" size="5">', '</div></div>');
+        hc.push('<div class="entryi"><label for="k-taganno-' + annoid + '-d">Legend</label><input id="k-taganno-' + annoid + '-d" name="legend_' + annoid + '" type="text" placeholder="none" size="32" class="need-autogrow"></div>');
+        hc.push('<div class="entryi"><label for="k-taganno-' + annoid + '-tagval">Tag value</label><div class="entry"><input id="k-taganno-' + annoid + '-tagval" name="tagval_' + annoid + '" type="text" size="5">', '</div></div>');
         if (anno.annoid)
-            hc.push(' <a class="ui closebtn delete-link need-tooltip" href="" aria-label="Delete group">x</a>');
+            hc.push(' <button type="button" class="ui closebtn delete-link need-tooltip" aria-label="Delete group">x</button>');
         hc.pop_n(2);
     }
     function show_dialog(rv) {
         if (!rv.ok || !rv.editable)
             return;
-        var hc = popup_skeleton({minWidth: "32rem"}),
+        var hc = popup_skeleton({className: "modal-dialog-w40"}),
             dtag = mytag.replace(/^\d+~/, "~"), i;
         hc.push('<h2>Annotate #' + dtag + ' order</h2>');
         hc.push('<p>These annotations will appear in searches such as “order:' + dtag + '”.</p>');
@@ -7787,7 +8991,7 @@ handle_ui.on("js-annotate-order", function () {
             $d.find("input[name='legend_" + annos[i].annoid + "']").val(annos[i].legend);
             $d.find("input[name='tagval_" + annos[i].annoid + "']").val(tagvalue_unparse(annos[i].tagval));
         }
-        $d.on("click", "button", clickh).on("click", "a.delete-link", ondeleteclick);
+        $d.on("click", "button", clickh);
     }
     $.get(hoturl("=api/taganno", {tag: mytag}), show_dialog);
 });
@@ -8225,7 +9429,7 @@ function check_version(url, versionstr) {
     var x;
     function updateverifycb(json) {
         var e;
-        if (json && json.messages && (e = $$("msgs-initial")))
+        if (json && json.messages && (e = $$("h-messages")))
             e.innerHTML = json.messages + e.innerHTML;
     }
     function updatecb(json) {
@@ -8265,7 +9469,7 @@ function render_user(u) {
 
 
 // ajax loading of paper information
-var plinfo = (function () {
+(function () {
 
 function prownear(e) {
     while (e && e.nodeName !== "TR") {
@@ -8346,12 +9550,12 @@ function render_assignment_selector() {
     this.appendChild(sel);
 }
 
-function set(f, $j, text) {
-    var elt = $j[0], m;
+function set(f, elt, text) {
+    var m;
     if (!elt)
         /* skip */;
     else if (text == null || text === "")
-        elt.innerHTML = "";
+        elt.replaceChildren();
     else {
         if (elt.className == "")
             elt.className = "fx" + f.foldnum;
@@ -8372,11 +9576,11 @@ handle_ui.on("js-plinfo-edittags", function () {
         if (!rv.ok || !rv.pid || rv.pid != pid)
             return;
         $(div).html('<div class="d-inline-flex"><em class="plx mr-2"><label for="tags ' + rv.pid + '">Tags</label>:</em>'
-            + '<div class="mf mf-text w-text"><textarea name="tags ' + rv.pid + '" cols="120" rows="1" class="want-focus need-suggest tags w-text" style="vertical-align:-0.5rem" data-tooltip-anchor="v" id="tags ' + rv.pid + '"></textarea></div>'
+            + '<div class="mf mf-text w-text"><textarea name="tags ' + rv.pid + '" cols="120" rows="1" class="want-focus need-suggest tags w-text" style="vertical-align:-0.5rem" data-tooltip-anchor="v" id="tags ' + rv.pid + '" spellcheck="false"></textarea></div>'
             + '<button type="button" name="tagsave ' + rv.pid + '" class="btn-primary ml-2">Save</button>'
             + '<button type="button" name="tagcancel ' + rv.pid + '" class="ml-2">Cancel</button></div>');
         ta = $(div).find("textarea")[0];
-        suggest.call(ta);
+        hotcrp.suggest.call(ta);
         $(ta).val(rv.tags_edit_text).autogrow()
             .on("keydown", make_onkey("Enter", do_submit))
             .on("keydown", make_onkey("Escape", do_cancel));
@@ -8461,7 +9665,7 @@ function pidfield(pid, f, index) {
     var row = f.as_row ? pidxrow(pid) : pidrow(pid);
     if (row && index == null)
         index = field_index(f);
-    return $(row ? row.childNodes[index] : null);
+    return row ? row.childNodes[index] : null;
 }
 
 
@@ -8473,7 +9677,7 @@ function make_tagmap() {
         for (i = 0; i !== tl.length; ++i) {
             t = tl[i].toLowerCase();
             if (t.charAt(0) === "~" && t.charAt(1) !== "~")
-                t = siteinfo.user.cid + t;
+                t = siteinfo.user.uid + t;
             p = t.indexOf("*");
             t = t.replace(/([^-A-Za-z_0-9])/g, "\\$1");
             if (p === 0)
@@ -8481,7 +9685,7 @@ function make_tagmap() {
             else if (p > 0)
                 x.push(t.replace('\\*', '.*'));
             else if (t === "any")
-                x.push('(?:' + (siteinfo.user.cid || 0) + '~.*|~~.*|(?!\\d+~).*)');
+                x.push('(?:' + (siteinfo.user.uid || 0) + '~.*|~~.*|(?!\\d+~).*)');
             else
                 x.push(t);
         }
@@ -8492,7 +9696,7 @@ function make_tagmap() {
         for (i = 0; i !== tl.length; ++i) {
             t = tl[i].toLowerCase();
             tagmap[t] = (tagmap[t] || 0) | 2;
-            t = siteinfo.user.cid + "~" + t;
+            t = siteinfo.user.uid + "~" + t;
             tagmap[t] = (tagmap[t] || 0) | 2;
         }
         if ($.isEmptyObject(tagmap))
@@ -8506,7 +9710,7 @@ function compute_row_tagset(tagstr, editable) {
     var t = [], tags = (tagstr || "").split(/ /);
     for (var i = 0; i !== tags.length; ++i) {
         var text = tags[i], twiddle = text.indexOf("~"), hash = text.indexOf("#");
-        if (text !== "" && (twiddle <= 0 || text.substr(0, twiddle) == siteinfo.user.cid)) {
+        if (text !== "" && (twiddle <= 0 || text.substr(0, twiddle) == siteinfo.user.uid)) {
             twiddle = Math.max(twiddle, 0);
             var tbase = text.substring(0, hash), tindex = text.substr(hash + 1),
                 tagx = tagmap ? tagmap[tbase.toLowerCase()] || 0 : 0, h, q;
@@ -8545,7 +9749,7 @@ function render_row_tags(div) {
             t = '<span class="fn5"><em class="plx">Tags:</em> ' + ct.join(" ") + '</span>' + t;
     }
     if (t != "" && ptr.getAttribute("data-tags-editable") != null) {
-        t += ' <span class="hoveronly"><span class="barsep">·</span> <a class="ui js-plinfo-edittags" href="">Edit</a></span>';
+        t += ' <span class="hoveronly"><span class="barsep">·</span> <button type="button" class="link ui js-plinfo-edittags">Edit</button></span>';
     }
     $(div).find("textarea").unautogrow();
     t == "" ? $(div).empty() : $(div).html(t);
@@ -8554,9 +9758,9 @@ function render_row_tags(div) {
 function make_tag_column_callback(f) {
     var tag = /^(?:#|tag:|tagval:)(\S+)/.exec(f.name)[1];
     if (/^~[^~]/.test(tag))
-        tag = siteinfo.user.cid + tag;
+        tag = siteinfo.user.uid + tag;
     return function (evt, rv) {
-        var e = pidfield(rv.pid, f)[0];
+        var e = pidfield(rv.pid, f);
         if (!e || f.missing)
             return;
         var tv = tag_value(rv.tags, tag), input = e.querySelector("input");
@@ -8578,7 +9782,7 @@ function make_tag_column_callback(f) {
     };
 }
 
-function render_needed() {
+hotcrp.render_list = function () {
     self || initialize();
     scorechart();
     $(".need-allpref").each(render_allpref);
@@ -8599,32 +9803,44 @@ function add_column(f) {
         this.setAttribute("colspan", +this.getAttribute("colspan") + 1);
     });
     var classes = (f.className || 'pl_' + f.name) + ' fx' + f.foldnum,
-        classEnd = ' class="pl ' + classes + '"', h = f.title, stmpl;
-    if (f.sort_name && (stmpl = self.getAttribute("data-sort-url-template"))) {
-        stmpl = stmpl.replace(/\{sort\}/, urlencode(f.sort_name));
-        h = '<a class="pl_sort" rel="nofollow" href="' + escape_html(stmpl) + '">' + h + '</a>';
-    }
-    h = '<th class="pl plh ' + classes + '">' + h + '</th>';
+        stmpl = f.sort && self.getAttribute("data-sort-url-template");
     $j.find("thead > tr.pl_headrow:first-child").each(function () {
-        this.insertBefore($(h)[0], this.childNodes[index] || null);
+        var th = document.createElement("th"), x = th;
+        th.className = "pl plh ".concat(classes, f.sort ? " sortable" : "");
+        th.setAttribute("data-pc", f.sort_name || f.name);
+        if (f.sort && stmpl) {
+            th.setAttribute("data-pc-sort", f.sort);
+            x = document.createElement("a");
+            th.appendChild(x);
+            x.className = "pl_sort";
+            x.rel = "nofollow";
+            x.setAttribute("href", stmpl.replace(/\{sort\}/, urlencode(f.sort_name || f.name)));
+        }
+        x.innerHTML = f.title;
+        this.insertBefore(th, this.childNodes[index] || null);
     });
-    h = '<td' + classEnd + '></td>';
+    var dclasses = "pl " + classes;
     $j.find("tr.pl").each(function () {
-        this.insertBefore($(h)[0], this.childNodes[index] || null);
+        var td = document.createElement("td");
+        td.className = dclasses;
+        this.insertBefore(td, this.childNodes[index] || null);
     });
-    h = '<td class="plstat ' + classes + '"></td>';
+    dclasses = "plstat " + classes;
     $j.find("tfoot > tr.pl_statrow").each(function () {
-        this.insertBefore($(h)[0], this.childNodes[index] || null);
+        var td = document.createElement("td");
+        td.className = dclasses;
+        this.insertBefore(td, this.childNodes[index] || null);
     });
     f.missing = false;
 }
 
 function add_row(f) {
     var index = field_index(f),
-        h = '<div class="' + (f.className || "pl_" + f.name) +
-            " fx" + f.foldnum + '"></div>';
+        classes = (f.className || "pl_" + f.name).concat(" fx", f.foldnum);
     $(self).find("tr.plx > td.plx").each(function () {
-        this.insertBefore($(h)[0], this.childNodes[index] || null);
+        var div = document.createElement("div");
+        div.className = classes;
+        this.insertBefore(div, this.childNodes[index] || null);
     });
     f.missing = false;
 }
@@ -8637,30 +9853,36 @@ function ensure_field(f) {
 function make_callback(dofold, type) {
     var f = fields[type], values, tr;
     function render_some() {
-        var index = field_index(f), htmlk = f.name;
-        for (var n = 0; n < 64 && tr; tr = tr.nextSibling)
+        var index = field_index(f), htmlk = f.name, n = 0, table = tr.closest("table");
+        while (n < 64 && tr) {
             if (tr.nodeName === "TR"
                 && tr.hasAttribute("data-pid")
                 && hasClass(tr, "pl")) {
                 var p = +tr.getAttribute("data-pid");
                 if (values.attr && p in values.attr) {
                     for (var k in values.attr[p])
-                        $(tr).attr(k, values.attr[p][k]);
+                        tr.setAttribute(k, values.attr[p][k]);
                 }
                 if (p in values.data) {
-                    var $elt = pidfield(p, f, index);
-                    if (!$elt.length)
+                    var elt = pidfield(p, f, index);
+                    if (!elt)
                         log_jserror("bad pidfield " + JSON.stringify([p, f.name, index]));
-                    set(f, $elt, values.data[p][htmlk]);
+                    set(f, elt, values.data[p][htmlk]);
                 }
                 ++n;
             }
-        render_needed();
-        if (tr)
-            setTimeout(render_some, 8);
+            do {
+                tr = tr.nextSibling;
+            } while (tr && tr.nodeType !== 1);
+            while (!tr && (table = table.nextSibling)) {
+                tr = table.querySelector("tr.pl");
+            }
+        }
+        hotcrp.render_list();
+        tr && setTimeout(render_some, 8);
     }
     function render_statistics(statvalues) {
-        var tr = $(self).find("tfoot > tr.pl_statrow").first()[0],
+        var tr = self.querySelector("tfoot > tr.pl_statrow"),
             index = field_index(f);
         for (; tr; tr = tr.nextSibling)
             if (tr.nodeName === "TR" && tr.hasAttribute("data-statistic")) {
@@ -8672,8 +9894,8 @@ function make_callback(dofold, type) {
     }
     function render_start() {
         ensure_field(f);
-        tr = $(self).find("tr.pl").first()[0];
-        render_some();
+        tr = self.querySelector("tr.pl");
+        tr && render_some();
         if (values.stat && f.name in values.stat) {
             render_statistics(values.stat[f.name]);
         }
@@ -8688,9 +9910,6 @@ function make_callback(dofold, type) {
             f.foldnum = f.missing = true;
             add_field(f);
             addClass(self, "fold" + f.foldnum + "c");
-        }
-        if (f) {
-            f.loadable = false;
         }
         if (type === "authors") {
             aufull[rv.fields[type].aufull] = rv;
@@ -8733,7 +9952,7 @@ function plinfo(type, dofold) {
             sesv = ses + type + (dofold ? "=1" : "=0");
     }
 
-    if (!f || f.loadable || (type === "aufull" && !aufull[!dofold])) {
+    if (!f || (type === "aufull" && !aufull[!dofold])) {
         // initiate load
         var loadargs = {fn: "fieldhtml", f: xtype};
         if (type === "aufull")
@@ -8767,27 +9986,15 @@ function plinfo(type, dofold) {
 }
 
 function initialize() {
-    self = $("table.pltable")[0];
+    self = $(".pltable")[0];
     if (!self)
         return false;
-    var fs = parse_json(self.getAttribute("data-columns"));
+    var fs = JSON.parse(self.getAttribute("data-columns"));
     for (var i = 0; i !== fs.length; ++i)
         add_field(fs[i]);
 }
 
-plinfo.set_scoresort = function (ss) {
-    self || initialize();
-    var re = / (?:counts|average|median|variance|minmax|my)$/;
-    for (var i = 0; i < field_order.length; ++i) {
-        var f = field_order[i];
-        if (f.sort_name)
-            f.sort_name = f.sort_name.replace(re, " " + ss);
-    }
-};
-
-plinfo.render_needed = render_needed;
-
-plinfo.update_tag_decoration = function ($title, html) {
+hotcrp.update_tag_decoration = function ($title, html) {
     $title.find(".tagdecoration").remove();
     if (html) {
         $title.append(html);
@@ -8834,11 +10041,11 @@ $(window).on("hotcrptags", function (evt, rv) {
     }).addClass(cc);
 
     // set tag decoration
-    plinfo.update_tag_decoration($ptr.find(".pl_title"), rv.tag_decoration_html);
+    hotcrp.update_tag_decoration($ptr.find(".pl_title"), rv.tag_decoration_html);
 
     // set actual tags
     if (fields.tags && !fields.tags.missing)
-        render_row_tags(pidfield(rv.pid, fields.tags)[0]);
+        render_row_tags(pidfield(rv.pid, fields.tags));
 });
 
 function change_color_classes(isconflicted) {
@@ -8893,7 +10100,6 @@ handle_ui.on("js-plinfo", function (evt) {
     evt.preventDefault();
 });
 
-return plinfo;
 })();
 
 
@@ -9125,31 +10331,22 @@ return function (classes, type) {
         svgns = "http://www.w3.org/2000/svg",
         pathsfx = " 0l".concat(-size, " ", size, "l", sw, " 0l", size, " ", -size, "z"),
         dxs = [],
-        pelt, elt;
+        pelt;
     for (i = 0; i !== colors.length; ++i) {
         k = param.type === 1 ? fillcolor(colors[i]) : bgcolor(colors[i]);
         dxs.push("M".concat(sw * i, pathsfx), k, "M".concat(sw * i + size, pathsfx), k);
     }
     if (param.type === 1) {
         if (svgdef === null) {
-            var svg = document.createElementNS(svgns, "svg");
-            svg.setAttribute("width", 0);
-            svg.setAttribute("height", 0);
+            var svg = svge("svg", "width", 0, "height", 0);
             svg.style.position = "absolute";
             document.body.insertBefore(svg, document.body.firstChild);
-            svgdef = document.createElementNS(svgns, "defs");
+            svgdef = svge("defs");
             svg.appendChild(svgdef);
         }
-        pelt = document.createElementNS(svgns, "pattern");
-        pelt.id = id;
-        pelt.setAttribute("patternUnits", "userSpaceOnUse");
-        pelt.setAttribute("width", size);
-        pelt.setAttribute("height", size);
+        pelt = svge("pattern", "id", id, "patternUnits", "userSpaceOnUse", "width", size, "height", size);
         for (i = 0; i !== dxs.length; i += 2) {
-            elt = document.createElementNS(svgns, "path");
-            elt.setAttribute("d", dxs[i]);
-            elt.setAttribute("fill", dxs[i + 1]);
-            pelt.appendChild(elt);
+            pelt.appendChild(svge("path", "d", dxs[i], "fill", dxs[i + 1]));
         }
         svgdef.appendChild(pelt);
     } else if (window.btoa) {
@@ -9193,9 +10390,10 @@ function transfer_form_values($dst, $src, names) {
 
 
 // login UI
-handle_ui.on("js-signin", function () {
+handle_ui.on("js-signin", function (evt) {
     var form = this, signin = document.getElementById("signin_signin");
     signin && (signin.disabled = true);
+    evt.preventDefault();
     $.get(hoturl("api/session"), function () { form.submit() });
 });
 
@@ -9219,7 +10417,7 @@ handle_ui.on("js-check-format", function () {
     if (this && "tagName" in this && this.tagName === "A")
         $self.addClass("hidden");
     var running = setTimeout(function () {
-        $cf.html(render_message_list([{message: "<0>Checking format (this can take a while)...", status: -1}]));
+        $cf.html(render_message_list([{message: "<0>Checking format (this can take a while)...", status: -4 /*MessageSet::MARKED_NOTE*/}]));
     }, 1000);
     $.ajax(hoturl("=api/formatcheck", {p: siteinfo.paperid}), {
         timeout: 20000, data: {
@@ -9302,98 +10500,71 @@ function background_format_check() {
 $(background_format_check);
 });
 
-handle_ui.on("change.js-submit-paper", function (evt) {
-    if (evt.target && (evt.target.name === "submission" || evt.target.name === "final" || evt.target.name === "submitpaper")) {
-        var readye = this.elements.submitpaper, was, is, label;
-        was = is = this.getAttribute("data-submitted");
-        if (!was) {
-            var e0 = this.elements.final || this.elements.submission;
-            if (e0 && e0.value) {
-                is = true;
-            } else if ((e0 = this.elements.has_final || this.elements.has_submission)) {
-                e0 = e0.nextSibling;
-                if (!hasClass(e0, "has-document"))
-                    throw new Error("bad has-document");
-                is = e0.hasAttribute("data-docid") || e0.hasAttribute("data-document-optional");
-            } else {
-                is = true;
-            }
-        }
-        if (!was)
-            fold($(this).find(".ready-container"), !is);
-        if (readye && readye.type === "checkbox" && is) {
-            is = readye.checked && $(readye).is(":visible");
-            readye.disabled = readye.disabled && !!was;
-        }
-        var t;
-        if (this.hasAttribute("data-contacts-only")) {
-            t = "Save contacts";
-        } else if (!is) {
-            t = "Save draft";
-        } else if (was) {
-            t = "Save and resubmit";
-        } else {
-            t = "Save and submit";
-        }
-        $("button.btn-savepaper").html(t);
-        if (readye && (label = readye.parentElement.nextSibling) && label.tagName === "LABEL") {
-            toggleClass(label, "is-error", !is);
-            if (label.nextSibling && hasClass(label.nextSibling, "if-unready")) {
-                toggleClass(label.nextSibling, "hidden", is);
-            }
-        }
-    }
-});
-
 handle_ui.on("js-add-attachment", function () {
     var attache = $$(this.getAttribute("data-editable-attachments")),
         f = attache.closest("form"),
-        $ei = $(attache), name, n = 0;
-    if (hasClass(attache, "entryi")) {
-        if (!$ei.find(".entry").length)
-            $ei.append('<div class="entry"></div>');
-        $ei = $ei.find(".entry");
+        ee = attache,
+        name, n = 0;
+    if (hasClass(ee, "entryi") && !(ee = attache.querySelector(".entry"))) {
+        ee = document.createElement("div");
+        ee.className = "entry";
+        attache.appendChild(ee);
     }
     do {
         ++n;
-        name = attache.getAttribute("data-document-prefix") + "_new_" + n;
-    } while (f.elements["has_" + name]);
-    var max_size = attache.getAttribute("data-document-max-size"),
-        $na = $('<div class="has-document document-new-instance hidden'
-            + '" data-dtype="' + attache.getAttribute("data-dtype")
-            + '" data-document-name="' + name
-            + (max_size == null ? "" : '" data-document-max-size="' + max_size)
-            + '"><div class="document-upload"><input type="file" name="' + name + '" size="15" class="uich document-uploader"></div>'
-            + '<div class="document-actions"><a href="" class="ui js-cancel-document document-action">Cancel</a></div>'
-            + '</div>');
+        name = attache.getAttribute("data-document-prefix") + ":" + n;
+    } while (f.elements[name]);
     if (this.id === name)
         this.removeAttribute("id");
-    $(f).append(hidden_input("has_" + name, "1", {"class": "ignore-diff"}));
-    $na.appendTo($ei).find(".document-uploader")[0].click();
+    var filee = document.createElement("input");
+    filee.type = "file";
+    filee.name = name + ":file";
+    filee.size = 15;
+    filee.className = "uich document-uploader";
+    var cancele = classe("button", "link ui js-cancel-document", "Cancel"),
+        actionse = classe("div", "document-actions", cancele);
+    cancele.type = "button";
+    var max_size = attache.getAttribute("data-document-max-size"),
+        doce = classe("div", "has-document document-new-instance hidden",
+            classe("div", "document-upload", filee), actionse);
+    doce.setAttribute("data-dtype", attache.getAttribute("data-dtype"));
+    doce.setAttribute("data-document-name", name);
+    if (max_size != null)
+        doce.setAttribute("data-document-max-size", max_size);
+    ee.appendChild(doce);
+    // this hidden_input cannot be in the document-uploader: the uploader
+    // might be removed later, but we need to hold the place
+    f.appendChild(hidden_input(name, "new", {"class": "ignore-diff"}));
+    filee.click();
 });
 
 handle_ui.on("js-replace-document", function () {
-    var doce = this.closest(".has-document"), $doc = $(doce),
-        $actions = $doc.find(".document-actions"),
-        $u = $doc.find(".document-uploader");
-    if (!$actions.length) {
-        $actions = $('<div class="document-actions hidden"></div>').insertBefore($doc.find(".document-replacer"));
-    }
-    if ($u.length) {
-        $u.trigger("hotcrp-change-document");
+    var doce = this.closest(".has-document"),
+        actions = doce.querySelector(".document-actions"),
+        u = doce.querySelector(".document-uploader");
+    if (!u) {
+        var dname = doce.getAttribute("data-document-name") || ("opt" + doce.getAttribute("data-dtype"));
+        u = classe("input", "uich document-uploader");
+        u.id = u.name = dname + ":file";
+        u.type = "file";
+        if (doce.hasAttribute("data-document-accept")) {
+            u.setAttribute("accept", doce.getAttribute("data-document-accept"));
+        }
+        doce.querySelector(".document-replacer").before(classe("div", "document-upload hidden", u));
     } else {
-        var docid = +doce.getAttribute("data-dtype"),
-            name = doce.getAttribute("data-document-name") || "opt" + docid,
-            t = '<div class="document-upload hidden"><input id="' + name + '" type="file" name="' + name + '"';
-        if (doce.hasAttribute("data-document-accept"))
-            t += ' accept="' + doce.getAttribute("data-document-accept") + '"';
-        t += ' class="uich document-uploader"></div>';
-        if (this.id === name)
-            this.removeAttribute("id");
-        $u = $(t).insertBefore($actions).find(".document-uploader");
-        $actions.append('<a href="" class="ui js-cancel-document document-action hidden">Cancel</a>');
+        $(u).trigger("hotcrp-change-document");
     }
-    $u[0].click();
+    if (!actions) {
+        actions = classe("div", "document-actions hidden");
+        doce.querySelector(".document-replacer").before(actions);
+    }
+    if (!actions.querySelector(".js-cancel-document")) {
+        var cancel = classe("button", "link ui js-cancel-document hidden");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        actions.appendChild(cancel);
+    }
+    u.click();
 });
 
 handle_ui.on("document-uploader", function () {
@@ -9414,8 +10585,9 @@ handle_ui.on("document-uploader", function () {
 handle_ui.on("js-cancel-document", function () {
     var doce = this.closest(".has-document"),
         $doc = $(doce), $actions = $doc.find(".document-actions"),
-        f = doce.closest("form");
-    $doc.find(".document-uploader").val("").change().trigger("hotcrp-change-document");
+        f = doce.closest("form"),
+        $uploader = $doc.find(".document-uploader");
+    $uploader.val("").trigger("hotcrp-change-document").trigger("change");
     if (hasClass(doce, "document-new-instance")) {
         var holder = doce.parentElement;
         $doc.remove();
@@ -9442,7 +10614,7 @@ handle_ui.on("js-remove-document", function () {
         $doc.find(".document-stamps, .document-shortformat").removeClass("hidden");
         $(this).removeClass("undelete").html("Delete");
     } else {
-        $(hidden_input($doc.data("documentName") + ":remove", "1", {"class": "document-remover", "data-default-value": ""})).appendTo($doc.find(".document-actions")).trigger("change");
+        $(hidden_input(doce.getAttribute("data-document-name") + ":remove", "1", {"class": "document-remover", "data-default-value": ""})).appendTo($doc.find(".document-actions")).trigger("change");
         if (!$en.find("del").length)
             $en.wrapInner("<del></del>");
         $doc.find(".document-uploader").trigger("hotcrp-change-document");
@@ -9517,7 +10689,7 @@ handle_ui.on("pspcard-fold", function (evt) {
     }
 });
 
-var edit_paper_ui = (function ($) {
+(function ($) {
 var edit_conditions = {};
 
 function prepare_paper_select() {
@@ -9527,7 +10699,7 @@ function prepare_paper_select() {
     function cancel(close) {
         $(ctl).val(input_default_value(ctl));
         if (close) {
-            foldup.call(self, null, {f: true});
+            foldup.call(self, null, {open: false});
             ctl.blur();
         }
     }
@@ -9536,7 +10708,7 @@ function prepare_paper_select() {
             minifeedback(ctl, data);
             if (data.ok) {
                 ctl.setAttribute("data-default-value", data.value);
-                close && foldup.call(self, null, {f: true});
+                close && foldup.call(self, null, {open: false});
                 var $p = $(self).find(".js-psedit-result").first();
                 $p.html(data.result || ctl.options[ctl.selectedIndex].innerHTML);
                 if (data.color_classes) {
@@ -9601,25 +10773,28 @@ function prepare_pstags() {
     }
     $f.on("keydown", "textarea", function (evt) {
         var key = event_key(evt);
-        if (key === "Enter" || key === "Escape") {
-            var mod = event_modkey(evt);
-            if (mod === 0 || (key === "Enter" && mod === event_modkey.META)) {
-                $f[0][key === "Enter" ? "save" : "cancel"].click();
-                evt.preventDefault();
-                handle_ui.stopImmediatePropagation(evt);
-            }
+        if (key === "Enter" && event_key.is_submit_enter(evt, true)) {
+            $f[0].elements.save.click();
+        } else if (key === "Escape") {
+            $f[0].elements.cancel.click();
+        } else {
+            return;
         }
+        evt.preventDefault();
+        handle_ui.stopImmediatePropagation(evt);
     });
     $f.find("button[name=cancel]").on("click", function (evt) {
         $ta.val($ta.prop("defaultValue"));
         $ta.removeClass("has-error");
         $f.find(".is-error").remove();
         $f.find(".btn-highlight").removeClass("btn-highlight");
+        foldup.call($ta[0], evt, {open: false});
         $ta[0].blur();
-        foldup.call($ta[0], evt, {f: true});
     });
     $f.on("submit", save_pstags);
-    $f.closest(".foldc, .foldo").on("unfold", function () {
+    $f.closest(".foldc, .foldo").on("foldtoggle", function (evt) {
+        if (!evt.which.open)
+            return;
         $f.data("everOpened", true);
         $f.find("input").prop("disabled", false);
         if (!$f.data("noTagReport")) {
@@ -9658,7 +10833,7 @@ function save_pstags(evt) {
             $f.find("input").prop("disabled", false);
             if (data.ok) {
                 if (message_list_status(data.message_list) < 2) {
-                    foldup.call($f[0], null, {f: true});
+                    foldup.call($f[0], null, {open: false});
                     minifeedback(f.elements.tags, {ok: true});
                 }
                 $(window).trigger("hotcrptags", [data]);
@@ -9668,7 +10843,7 @@ function save_pstags(evt) {
                 addClass(f.elements.tags, "has-error");
                 addClass(f.elements.save, "btn-highlight");
                 data.message_list = data.message_list || [];
-                data.message_list.unshift({message: "Your changes were not saved. Please correct these errors and try again.", status: -4});
+                data.message_list.unshift({message: "Your changes were not saved. Please correct these errors and try again.", status: -2 /*MessageSet::WARNING_NOTE*/});
             }
             if (data.message_list)
                 render_tag_messages.call($f[0], data.message_list);
@@ -9699,7 +10874,7 @@ function save_pstagindex(evt) {
         $f.removeClass("submitting");
         minifeedback($f.find("input")[0], data);
         if (data.ok && (data.message_list || []).length === 0) {
-            foldup.call($f[0], null, {f: true});
+            foldup.call($f[0], null, {open: false});
         } else {
             focus_within($f);
         }
@@ -9733,7 +10908,7 @@ function evaluate_edit_condition(ec, form) {
     } else if (edit_conditions[ec.type]) {
         return edit_conditions[ec.type](ec, form);
     } else {
-        throw new Error("unknown edit condition");
+        throw new Error("unknown edit condition " + ec.type);
     }
 }
 
@@ -9757,24 +10932,24 @@ edit_conditions.checkbox = function (ec, form) {
     return e && e.checked;
 };
 edit_conditions.checkboxes = function (ec, form) {
-    if (ec.values === false || ec.values === true) {
+    var vs = ec.values;
+    if (vs === false || vs === true || vs == null) {
         var es = form.elements[ec.formid].querySelectorAll("input:checked");
-        return ec.values === (es.length !== 0);
+        return (vs === false) === (es.length === 0);
     }
-    for (var i = 0; i !== ec.values.length; ++i) {
-        if (form.elements[ec.formid + ":" + ec.values[i]].checked)
+    for (var i = 0; i !== vs.length; ++i) {
+        if (form.elements[ec.formid + ":" + vs[i]].checked)
             return true;
     }
     return false;
 };
-edit_conditions.selector = function (ec, form) {
+edit_conditions.dropdown = function (ec, form) {
     var e = form.elements[ec.formid];
     return e && e.value ? +e.value : false;
 };
 edit_conditions.text_present = function (ec, form) {
-    var e = form.elements[ec.formid],
-        v = $.trim(e ? e.value : "");
-    return v !== "";
+    var e = form.elements[ec.formid];
+    return $.trim(e ? e.value : "") !== "";
 };
 edit_conditions.numeric = function (ec, form) {
     var e = form.elements[ec.formid],
@@ -9785,12 +10960,19 @@ edit_conditions.document_count = function (ec, form) {
     var n = 0;
     $(form).find(".has-document").each(function () {
         if (this.getAttribute("data-dtype") == ec.dtype) {
-            var name = this.getAttribute("data-document-name"), e;
-            if ((e = form.elements[name])) {
-                n += e.value ? 1 : 0;
-            } else if ($(this).find(".document-file").length
-                       && !form.elements[name + ":remove"]) {
-                n += 1;
+            var name = this.getAttribute("data-document-name"),
+                preve = form.elements[name],
+                removee = form.elements[name + ":remove"],
+                filee = form.elements[name + ":file"],
+                uploade = form.elements[name + ":upload"];
+            if (!removee || !removee.value) {
+                if (uploade && uploade.value) {
+                    n += 1;
+                } else if (filee && filee.files && filee.files.length > 0) {
+                    n += filee.files.length;
+                } else if (preve && preve.value) {
+                    n += 1;
+                }
             }
         }
     });
@@ -9807,20 +10989,20 @@ edit_conditions["in"] = function (ec, form) {
 }
 edit_conditions.title = function (ec, form) {
     var e = form.elements.title;
-    return ec.match === ($.trim(e && e.value) !== "");
+    return ec.match === ($.trim(e ? e.value : "") !== "");
 };
 edit_conditions.abstract = function (ec, form) {
     var e = form.elements.abstract;
-    return ec.match === ($.trim(e && e.value) !== "");
+    return ec.match === ($.trim(e ? e.value : "") !== "");
 };
 edit_conditions.collaborators = function (ec, form) {
     var e = form.elements.collaborators;
-    return ec.match === ($.trim(e && e.value) !== "");
+    return ec.match === ($.trim(e ? e.value : "") !== "");
 };
 edit_conditions.pc_conflict = function (ec, form) {
     var n = 0, elt;
-    for (var i = 0; i !== ec.cids.length; ++i)
-        if ((elt = form.elements["pcconf:" + ec.cids[i]])
+    for (var i = 0; i !== ec.uids.length; ++i)
+        if ((elt = form.elements["pcconf:" + ec.uids[i]])
             && (elt.type === "checkbox" ? elt.checked : +elt.value > 1)) {
             ++n;
             if (n > ec.value)
@@ -9831,7 +11013,7 @@ edit_conditions.pc_conflict = function (ec, form) {
 
 function run_edit_conditions() {
     var f = this.closest("form"),
-        ec = parse_json(this.getAttribute("data-edit-condition")),
+        ec = JSON.parse(this.getAttribute("data-edit-condition")),
         off = !evaluate_edit_condition(ec, f),
         link = navsidebar.get(this);
     toggleClass(this, "hidden", off);
@@ -9847,22 +11029,24 @@ function header_text(hdr) {
 }
 
 function add_pslitem_header() {
-    var l = this.firstChild, id;
-    if (l.tagName === "LABEL") {
-        id = this.id || l.getAttribute("for") || $(l).find("input").attr("id");
+    var l = this.firstChild, id = this.id, e, xt;
+    if (l && l.nodeName === "LABEL") {
+        id = id || l.getAttribute("for");
+        if (!id && (e = l.querySelector("input")))
+            id = e.id;
+    } else {
+        l = this.querySelector(".field-title") || this;
     }
-    if (id) {
-        var xt = header_text(l),
-            item = xt ? navsidebar.set(this.parentElement, escape_html(xt), "#" + id) : null;
-        if (item) {
-            var e = item.element, ise = hasClass(this, "has-error"),
-                isw = hasClass(this, "has-warning");
-            toggleClass(e.firstChild, "is-diagnostic", ise || isw);
-            toggleClass(e.firstChild, "is-error", ise);
-            toggleClass(e.firstChild, "is-warning", isw);
-            toggleClass(e, "hidden", hasClass(this.parentElement, "hidden"));
-        }
+    if (!id || !(xt = header_text(l))) {
+        return;
     }
+    e = navsidebar.set(this.parentElement, escape_html(xt), "#" + id).element;
+    var ise = hasClass(this, "has-error"),
+        isw = hasClass(this, "has-warning");
+    toggleClass(e.firstChild, "is-diagnostic", ise || isw);
+    toggleClass(e.firstChild, "is-error", ise);
+    toggleClass(e.firstChild, "is-warning", isw);
+    toggleClass(e, "hidden", hasClass(this.parentElement, "hidden"));
 }
 
 function add_pslitem_pfe() {
@@ -9898,74 +11082,145 @@ function fieldchange(evt) {
         .trigger({type: "fieldchange", changeTarget: evt.target});
 }
 
-return {
-    edit_condition: function () {
-        $("#form-paper").on("fieldchange", ".has-edit-condition", run_edit_conditions)
-            .find(".has-edit-condition").each(run_edit_conditions);
-    },
-    evaluate_edit_condition: function (ec) {
-        return evaluate_edit_condition(typeof ec === "string" ? parse_json(ec) : ec, $("#form-paper")[0]);
-    },
-    load: function () {
-        var f = document.getElementById("form-paper");
+function prepare_autoready_condition(f) {
+    var condition = null, readye = f.elements.submitpaper;
+    if (!readye) {
+        return;
+    }
+    if (f.hasAttribute("data-autoready-condition")) {
+        condition = JSON.parse(f.getAttribute("data-autoready-condition"));
+    }
+    function chf() {
+        var was, iscond, e, readychecked;
+        iscond = !condition || hotcrp.evaluate_edit_condition(condition, f);
+        readye.disabled = !iscond;
+        if (iscond && readye.hasAttribute("data-autoready")) {
+            readye.checked = true;
+            readye.removeAttribute("data-autoready");
+        }
+        if (readye.type === "checkbox") {
+            readychecked = readye.checked;
+        } else {
+            readychecked = readye.value !== "" && readye.value !== "0";
+        }
+        e = readye.parentElement.parentElement;
+        toggleClass(e, "hidden", !iscond);
+        toggleClass(e, "is-error", iscond && !readychecked && readye.hasAttribute("data-urgent"));
+        for (e = e.nextSibling; e && e.tagName === "P"; e = e.nextSibling) {
+            if (hasClass(e, "if-unready-required")) {
+                toggleClass(e, "hidden", iscond);
+            } else if (hasClass(e, "if-unready")) {
+                toggleClass(e, "hidden", !iscond || readychecked);
+            } else if (hasClass(e, "if-ready")) {
+                toggleClass(e, "hidden", !iscond || !readychecked);
+            }
+        }
+        var t;
+        if (f.hasAttribute("data-contacts-only")) {
+            t = "Save contacts";
+        } else if (!iscond || !readychecked) {
+            t = "Save draft";
+        } else if (was) {
+            t = "Save and resubmit";
+        } else {
+            t = "Save and submit";
+        }
+        $("button.btn-savepaper").text(t);
+    }
+    if (condition) {
+        $(f).on("change", chf); // jQuery required because we `trigger` later
+    } else {
+        $(readye).on("change", chf);
+    }
+    chf.call(f);
+}
+
+hotcrp.load_editable_paper = function () {
+    var f = $$("f-paper") || /* XXX */ $$("form-paper");
+    hiliter_children(f);
+    prepare_autoready_condition(f);
+    $(".pfe").each(add_pslitem_pfe);
+    var h = $(".btn-savepaper").first(),
+        k = hasClass(f, "alert") ? "" : " hidden";
+    $(".pslcard-nav").append('<div class="paper-alert mt-5'.concat(k,
+        '"><button class="ui btn-highlight btn-savepaper">', h.html(),
+        '</button></div>'))
+        .find(".btn-savepaper").click(function () {
+            $("#f-paper .btn-savepaper").first().trigger({type: "click", sidebarTarget: this});
+        });
+    $(f).on("change", "input, select, textarea", fieldchange);
+};
+
+hotcrp.load_editable_review = function () {
+    var rfehead = $(".rfehead");
+    rfehead.each(add_pslitem_header);
+    if (rfehead.length) {
+        $(".pslcard > .pslitem:last-child").addClass("mb-3");
+    }
+    hiliter_children("#f-review");
+    var k = $("#f-review").hasClass("alert") ? "" : " hidden",
+        h = $(".btn-savereview").first();
+    $(".pslcard-nav").append('<div class="review-alert mt-5'.concat(k,
+        '"><button class="ui btn-highlight btn-savereview">', h.html(),
+        '</button></div>'))
+        .find(".btn-savereview").click(function () {
+            $("#f-review .btn-savereview").first().trigger({type: "click", sidebarTarget: this});
+        });
+};
+
+hotcrp.load_editable_pc_assignments = function () {
+    $("h2").each(add_pslitem_header);
+    var f = $$("f-pc-assignments") || /* XXX */ $$("form-pc-assignments");
+    if (f) {
         hiliter_children(f);
-        f.elements.submitpaper && $(f.elements.submitpaper).change();
-        $(".pfe").each(add_pslitem_pfe);
-        var h = $(".btn-savepaper").first(),
-            k = hasClass(f, "alert") ? "" : " hidden";
+        var k = hasClass(f, "alert") ? "" : " hidden";
         $(".pslcard-nav").append('<div class="paper-alert mt-5'.concat(k,
-            '"><button class="ui btn-highlight btn-savepaper">', h.html(),
-            '</button></div>'))
+            '"><button class="ui btn-highlight btn-savepaper">Save PC assignments</button></div>'))
             .find(".btn-savepaper").click(function () {
-                $("#form-paper .btn-savepaper").first().trigger({type: "click", sidebarTarget: this});
+                $("#f-pc-assignments .btn-primary").first().trigger({type: "click", sidebarTarget: this});
             });
-        $(f).on("change", "input, select, textarea", fieldchange)
-            .on("click", "input[type=checkbox], input[type=radio]", fieldchange);
-    },
-    prepare: function () {
-        $(".need-tag-index-form").each(function () {
-            $(this).removeClass("need-tag-index-form").on("submit", save_pstagindex)
-                .find("input").on("change", save_pstagindex);
-        });
-        $(".need-tag-form").each(prepare_pstags);
-        $(".need-paper-select-api").each(function () {
-            removeClass(this, "need-paper-select-api");
-            prepare_paper_select.call(this);
-        });
-    },
-    load_review: function () {
-        hiliter_children("#form-review");
-        $(".rfehead").each(add_pslitem_header);
-        if ($(".rfehead").length) {
-            $(".pslcard > .pslitem:last-child").addClass("mb-3");
-        }
-        var h = $(".btn-savereview").first(),
-            k = $("#form-review").hasClass("alert") ? "" : " hidden";
-        $(".pslcard-nav").append('<div class="review-alert mt-5'.concat(k,
-            '"><button class="ui btn-highlight btn-savereview">', h.html(),
-            '</button></div>'))
-            .find(".btn-savereview").click(function () {
-                $("#form-review .btn-savereview").first().trigger({type: "click", sidebarTarget: this});
-            });
-    },
-    replace_field: function (field, elt) {
-        var pfe = $$(field).closest(".pfe");
-        if (elt.tagName !== "DIV" || !hasClass(elt, "pfe")) {
-            throw new Error("bad DIV");
-        }
-        pfe.className = elt.className;
-        pfe.replaceChildren();
-        while (elt.firstChild)
-            pfe.appendChild(elt.firstChild);
-        add_pslitem_pfe.call(pfe);
     }
 };
+
+hotcrp.load_paper_sidebar = function () {
+    $(".need-tag-index-form").each(function () {
+        $(this).removeClass("need-tag-index-form").on("submit", save_pstagindex)
+            .find("input").on("change", save_pstagindex);
+    });
+    $(".need-tag-form").each(prepare_pstags);
+    $(".need-paper-select-api").each(function () {
+        removeClass(this, "need-paper-select-api");
+        prepare_paper_select.call(this);
+    });
+};
+
+hotcrp.replace_editable_field = function (field, elt) {
+    var pfe = $$(field).closest(".pfe");
+    if (elt.tagName !== "DIV" || !hasClass(elt, "pfe")) {
+        throw new Error("bad DIV");
+    }
+    pfe.className = elt.className;
+    pfe.replaceChildren();
+    while (elt.firstChild)
+        pfe.appendChild(elt.firstChild);
+    add_pslitem_pfe.call(pfe);
+};
+
+hotcrp.paper_edit_conditions = function () {
+    $("#f-paper").on("fieldchange", ".has-edit-condition", run_edit_conditions)
+        .find(".has-edit-condition").each(run_edit_conditions);
+};
+
+hotcrp.evaluate_edit_condition = function (ec, form) {
+    return evaluate_edit_condition(typeof ec === "string" ? JSON.parse(ec) : ec, form || $$("f-paper"));
+};
+
 })($);
 
 
 function tag_value(taglist, t) {
     if (t.charCodeAt(0) === 126 /* ~ */ && t.charCodeAt(1) !== 126)
-        t = siteinfo.user.cid + t;
+        t = siteinfo.user.uid + t;
     t = t.toLowerCase();
     var tlen = t.length;
     for (var i = 0; i !== taglist.length; ++i) {
@@ -10008,7 +11263,7 @@ if (siteinfo.paperid) {
         $(".is-tag-index").each(function () {
             set_tag_index(this, data.tags);
         });
-        plinfo.update_tag_decoration($("h1.paptitle"), data.tag_decoration_html);
+        hotcrp.update_tag_decoration($("h1.paptitle"), data.tag_decoration_html);
     });
 }
 
@@ -10074,8 +11329,8 @@ handle_ui.on("js-profile-role", function () {
     var $f = $(this.form),
         pctype = $f.find("input[name=pctype]:checked").val(),
         ass = $f.find("input[name=ass]:checked").length;
-    foldup.call(this, null, {n: 1, f: !pctype || pctype === "none"});
-    foldup.call(this, null, {n: 2, f: (!pctype || pctype === "none") && ass === 0});
+    foldup.call(this, null, {n: 1, open: pctype && pctype !== "none"});
+    foldup.call(this, null, {n: 2, open: (pctype && pctype !== "none") || ass !== 0});
 });
 
 handle_ui.on("js-profile-current-password", function () {
@@ -10107,7 +11362,8 @@ handle_ui.on("js-profile-token-delete", function () {
 
 
 // review UI
-handle_ui.on("js-acceptish-review", function () {
+handle_ui.on("js-acceptish-review", function (evt) {
+    evt.preventDefault();
     $.ajax(this.formAction || this.action, {
         method: "POST", data: $(this.form).serialize(),
         success: function (data) {
@@ -10184,16 +11440,16 @@ handle_ui.on("js-edit-formulas", function () {
     function push1(hc, f) {
         ++count;
         hc.push('<div class="editformulas-formula" data-formula-number="' + count + '">', '</div>');
-        hc.push('<div class="entryi"><label for="htctl_formulaname_' + count + '">Name</label><div class="entry nw">', '</div></div>');
+        hc.push('<div class="entryi"><label for="k-formulaname_' + count + '">Name</label><div class="entry nw">', '</div></div>');
         if (f.editable) {
-            hc.push('<input type="text" id="htctl_formulaname_' + count + '" class="editformulas-name need-autogrow" name="formulaname_' + count + '" size="30" value="' + escape_html(f.name) + '" placeholder="Formula name">');
-            hc.push('<a class="ui closebtn delete-link need-tooltip" href="" aria-label="Delete formula">x</a>');
+            hc.push('<input type="text" id="k-formulaname_' + count + '" class="editformulas-name need-autogrow" name="formulaname_' + count + '" size="30" value="' + escape_html(f.name) + '" placeholder="Formula name">');
+            hc.push('<button type="button" class="ui closebtn delete-link need-tooltip" aria-label="Delete formula">x</button>');
         } else
             hc.push(escape_html(f.name));
         hc.pop();
-        hc.push('<div class="entryi"><label for="htctl_formulaexpression_' + count + '">Expression</label><div class="entry">', '</div></div>');
+        hc.push('<div class="entryi"><label for="k-formulaexpression_' + count + '">Expression</label><div class="entry">', '</div></div>');
         if (f.editable)
-            hc.push('<textarea class="editformulas-expression need-autogrow w-99" id="htctl_formulaexpression_' + count + '" name="formulaexpression_' + count + '" rows="1" cols="64" placeholder="Formula definition">' + escape_html(f.expression) + '</textarea>')
+            hc.push('<textarea class="editformulas-expression need-autogrow w-99" id="k-formulaexpression_' + count + '" name="formulaexpression_' + count + '" rows="1" cols="64" placeholder="Formula definition">' + escape_html(f.expression) + '</textarea>')
                 .push('<input type="hidden" name="formulaid_' + count + '" value="' + f.id + '">');
         else
             hc.push(escape_html(f.expression));
@@ -10211,6 +11467,8 @@ handle_ui.on("js-edit-formulas", function () {
             $f[0].setAttribute("data-formula-new", "");
             focus_at($f.find(".editformulas-name"));
             $d.find(".modal-dialog").scrollIntoView({atBottom: true, marginBottom: "auto"});
+        } else if (hasClass(this, "delete-link")) {
+            ondelete.call(this);
         }
     }
     function ondelete() {
@@ -10236,9 +11494,9 @@ handle_ui.on("js-edit-formulas", function () {
             });
     }
     function create(formulas) {
-        var hc = popup_skeleton({className: "modal-medium"}), i;
+        var hc = popup_skeleton({className: "modal-dialog-w40"}), i;
         hc.push('<h2>Named formulas</h2>');
-        hc.push('<p><a href="' + hoturl("help", "t=formulas") + '" target="_blank">Formulas</a>, such as “sum(OveMer)”, are calculated from review statistics and paper information. Named formulas are shared with the PC and can be used in other formulas. To view an unnamed formula, use a search term like “show:(sum(OveMer))”.</p>');
+        hc.push('<p><a href="' + hoturl("help", "t=formulas") + '" target="_blank" rel="noopener">Formulas</a>, such as “sum(OveMer)”, are calculated from review statistics and paper information. Named formulas are shared with the PC and can be used in other formulas. To view an unnamed formula, use a search term like “show:(sum(OveMer))”.</p>');
         hc.push('<div class="editformulas">', '</div>');
         for (i in formulas || [])
             push1(hc, formulas[i]);
@@ -10246,7 +11504,6 @@ handle_ui.on("js-edit-formulas", function () {
         hc.push_actions(['<button type="submit" name="saveformulas" value="1" class="btn-primary">Save</button>', '<button type="button" name="cancel">Cancel</button>']);
         $d = hc.show();
         $d.on("click", "button", click);
-        $d.on("click", "a.delete-link", ondelete);
         $d.on("submit", "form", submit);
     }
     $.get(hoturl("=api/namedformula"), function (data) {
@@ -10282,7 +11539,7 @@ handle_ui.on("js-edit-view-options", function () {
         evt.preventDefault();
     }
     function create(display_default, display_current) {
-        var hc = popup_skeleton({className: "modal-medium"});
+        var hc = popup_skeleton({className: "modal-dialog-w40"});
         hc.push('<h2>View options</h2>');
         hc.push('<div class="f-i"><div class="f-c">Default view options</div>', '</div>');
         hc.push('<div class="reportdisplay-default">' + escape_html(display_default || "(none)") + '</div>');
@@ -10294,7 +11551,7 @@ handle_ui.on("js-edit-view-options", function () {
         $d = hc.show();
         $d.on("submit", "form", submit);
     }
-    $.ajax(hoturl("=api/viewoptions", {q: $("#searchform input[name=q]").val()}), {
+    $.ajax(hoturl("=api/viewoptions", {q: $("#f-search input[name=q]").val()}), {
         success: function (data) {
             if (data.ok)
                 create(data.display_default, data.display_current);
@@ -10307,16 +11564,16 @@ handle_ui.on("js-edit-namedsearches", function () {
     function push1(hc, f) {
         ++count;
         hc.push('<div class="editsearches-search" data-search-number="' + count + '">', '</div>');
-        hc.push('<div class="entryi"><label for="htctl_searchname_' + count + '">Name</label><div class="entry nw">', '</div></div>');
+        hc.push('<div class="entryi"><label for="k-searchname_' + count + '">Name</label><div class="entry nw">', '</div></div>');
         if (f.editable) {
-            hc.push('<input type="text" id="htctl_searchname_' + count + '" class="editsearches-name need-autogrow" name="searchname_' + count + '" size="30" value="' + escape_html(f.name) + '" placeholder="Search name">');
-            hc.push('<a class="ui closebtn delete-link need-tooltip" href="" aria-label="Delete search">x</a>');
+            hc.push('<input type="text" id="k-searchname_' + count + '" class="editsearches-name need-autogrow" name="searchname_' + count + '" size="30" value="' + escape_html(f.name) + '" placeholder="Search name">');
+            hc.push('<button type="button" class="ui closebtn delete-link need-tooltip" aria-label="Delete search">x</button>');
         } else
             hc.push(escape_html(f.name));
         hc.pop();
-        hc.push('<div class="entryi"><label for="htctl_searchquery_' + count + '">Search</label><div class="entry">', '</div></div>');
+        hc.push('<div class="entryi"><label for="k-searchquery_' + count + '">Search</label><div class="entry">', '</div></div>');
         if (f.editable)
-            hc.push('<textarea class="editsearches-query need-autogrow w-99" id="htctl_searchquery_' + count + '" name="searchq_' + count + '" rows="1" cols="64" placeholder="(All)">' + escape_html(f.q) + '</textarea>');
+            hc.push('<textarea class="editsearches-query need-autogrow w-99" id="k-searchquery_' + count + '" name="searchq_' + count + '" rows="1" cols="64" placeholder="(All)">' + escape_html(f.q) + '</textarea>');
         else
             hc.push(escape_html(f.q));
         hc.push('<input type="hidden" name="searchid_' + count + '" value="' + (f.id || f.name) + '">');
@@ -10329,12 +11586,14 @@ handle_ui.on("js-edit-namedsearches", function () {
     function click() {
         if (this.name === "add") {
             var hc = new HtmlCollector,
-                q = document.getElementById("searchform");
+                q = document.getElementById("f-search");
             push1(hc, {name: "", q: q ? q.getAttribute("data-lquery") : "", editable: true, id: "new"});
             var $f = $(hc.render()).appendTo($d.find(".editsearches")).awaken();
             $f[0].setAttribute("data-search-new", "");
             focus_at($f.find(".editsearches-name"));
             $d.find(".modal-dialog").scrollIntoView({atBottom: true, marginBottom: "auto"});
+        } else if (hasClass(this, "delete-link")) {
+            ondelete.call(this);
         }
     }
     function ondelete() {
@@ -10360,7 +11619,7 @@ handle_ui.on("js-edit-namedsearches", function () {
             });
     }
     function create(searches) {
-        var hc = popup_skeleton({className: "modal-medium"}), i;
+        var hc = popup_skeleton({className: "modal-dialog-w40"}), i;
         hc.push('<h2>Saved searches</h2>');
         hc.push('<p>Invoke a saved search with “ss:NAME”. Saved searches are shared with the PC.</p>');
         hc.push('<div class="editsearches">', '</div>');
@@ -10371,7 +11630,6 @@ handle_ui.on("js-edit-namedsearches", function () {
         hc.push_actions(['<button type="submit" name="savesearches" value="1" class="btn-primary">Save</button>', '<button type="button" name="cancel">Cancel</button>']);
         $d = hc.show();
         $d.on("click", "button", click);
-        $d.on("click", "a.delete-link", ondelete);
         $d.on("submit", "form", submit);
     }
     $.get(hoturl("=api/namedsearch"), function (data) {
@@ -10381,24 +11639,28 @@ handle_ui.on("js-edit-namedsearches", function () {
 });
 
 handle_ui.on("js-select-all", function () {
-    $(this).closest("table.pltable").find("input.js-selector").prop("checked", true);
+    $(this).closest(".pltable").find("input.js-selector").prop("checked", true);
 });
 
 
-handle_ui.on("js-tag-list-action", function () {
+handle_ui.on("js-tag-list-action", function (evt) {
+    if (evt.type === "foldtoggle" && !evt.which.open)
+        return;
     removeClass(this, "js-tag-list-action");
     $("select.js-submit-action-info-tag").on("change", function () {
-        var $t = $(this).closest(".linelink"),
-            $ty = $t.find("select[name=tagfn]");
-        foldup.call($t[0], null, {f: $ty.val() !== "cr", n: 99});
-        foldup.call($t[0], null, {f: $ty.val() === "cr"
-            || (!$t.find("input[name=tagcr_source]").val()
-                && $t.find("input[name=tagcr_method]").val() !== "schulze"
-                && !$t.find("input[name=tagcr_gapless]").is(":checked"))});
+        var lf = this.form, ll = this.closest(".linelink"),
+            cr = lf.elements.tagfn.value === "cr";
+        foldup.call(ll, null, {open: cr, n: 98});
+        foldup.call(ll, null, {open: cr
+            && (lf.elements.tagcr_source.value
+                || lf.elements.tagcr_method.value !== "schulze"
+                || lf.elements.tagcr_gapless.checked), n: 99});
     }).trigger("change");
 });
 
-handle_ui.on("js-assign-list-action", function () {
+handle_ui.on("js-assign-list-action", function (evt) {
+    if (evt.type === "foldtoggle" && !evt.which.open)
+        return;
     var self = this;
     removeClass(self, "js-assign-list-action");
     demand_load.pc().then(function (pcs) {
@@ -10408,7 +11670,7 @@ handle_ui.on("js-assign-list-action", function () {
         $(".js-submit-action-info-assign").on("change", function () {
             var $mpc = $(self).find("select[name=markpc]"),
                 afn = $(this).val();
-            foldup.call(self, null, {f: afn === "auto"});
+            foldup.call(self, null, {open: afn !== "auto"});
             if (afn === "lead" || afn === "shepherd") {
                 $(self).find(".js-assign-for").html("to");
                 if (!$mpc.find("option[value=0]").length)
@@ -10460,35 +11722,45 @@ handle_ui.on("js-submit-list", function (evt) {
         fn = this.value;
         fnbutton = this;
         form = this.form;
-    } else if (form.elements.defaultfn && form.elements.defaultfn.value) {
-        fn = form.elements.defaultfn.value;
-        fnbutton = form.querySelector(".js-submit-list[name=fn,value='" + fn + "']");
-    } else if (document.activeElement) {
-        e = document.activeElement.closest(".pl-footer-part");
-        es = e ? e.querySelectorAll(".js-submit-list") : null;
+    } else if ((e = form.elements.defaultfn) && e.value) {
+        fn = e.value;
+        es = form.elements.fn;
+        for (i = 0; es && i !== es.length; ++i) {
+            if (es[i].value === fn)
+                fnbutton = es[i];
+        }
+    } else if (document.activeElement
+               && (e = document.activeElement.closest(".pl-footer-part"))) {
+        es = e.querySelectorAll(".js-submit-list");
         if (es && es.length === 1) {
             fn = es[0].value;
             fnbutton = es[0];
         }
     }
-    if (fn && fn.indexOf("/") < 0 && (e = form.elements[fn + "fn"]) && e.value)
+    if (fn
+        && fn.indexOf("/") < 0
+        && (e = form.elements[fn + "fn"])
+        && e.value) {
         fn += "/" + e.value;
+    }
 
     // find selected
-    var table = (fnbutton && fnbutton.closest("table.pltable")) || form;
+    var table = (fnbutton && fnbutton.closest(".pltable")) || form;
     es = table.querySelectorAll("input.js-selector");
     var allval = [], chkval = [], isdefault;
     for (i = 0; i !== es.length; ++i) {
         allval.push(es[i].value);
         es[i].checked && chkval.push(es[i].value);
     }
-    if (!chkval.length && fnbutton && hasClass(fnbutton, "can-submit-all")) {
-        chkval = allval;
-        isdefault = true;
-    } else if (!chkval.length) {
-        alert("Select one or more rows first.");
-        evt.preventDefault();
-        return;
+    if (!chkval.length) {
+        if (fnbutton && hasClass(fnbutton, "can-submit-all")) {
+            chkval = allval;
+            isdefault = true;
+        } else if (!chkval.length) {
+            alert("Select one or more rows first.");
+            evt.preventDefault();
+            return;
+        }
     }
 
     // create a new form
@@ -10498,8 +11770,9 @@ handle_ui.on("js-submit-list", function (evt) {
             document.body.removeChild(e);
     }
     var bgform, action = form.action, need_bulkwarn = false;
-    if (fnbutton && fnbutton.hasAttribute("formaction"))
+    if (fnbutton && fnbutton.hasAttribute("formaction")) {
         action = fnbutton.getAttribute("formaction");
+    }
     if (fnbutton && fnbutton.getAttribute("formmethod") === "get" && chkval.length < 20) {
         bgform = hoturl_get_form(action);
         if (!bgform.elements.fn)
@@ -10511,14 +11784,15 @@ handle_ui.on("js-submit-list", function (evt) {
         bgform.setAttribute("enctype", "multipart/form-data");
         bgform.setAttribute("accept-charset", "UTF-8");
         if (chkval.length < 20) {
-            action = hoturl_add(hoturl_remove(action, "p"), "p=" + encodeURIComponent(chkval.join(" ")));
+            action = hoturl_set(action, "p", chkval.join(" "));
             chkval = null;
         }
-        bgform.action = hoturl_add(hoturl_remove(action, "fn"), "fn=" + encodeURIComponent(fn));
+        bgform.action = hoturl_set(action, "fn", fn);
     }
     bgform.className = "is-background-form";
-    if (fnbutton && fnbutton.hasAttribute("formtarget"))
+    if (fnbutton && fnbutton.hasAttribute("formtarget")) {
         bgform.setAttribute("target", fnbutton.getAttribute("formtarget"));
+    }
     document.body.appendChild(bgform);
     if (chkval)
         bgform.appendChild(hidden_input("p", chkval.join(" ")));
@@ -10536,8 +11810,9 @@ handle_ui.on("js-submit-list", function (evt) {
                     e.setAttribute("name", es[i].name);
                     bgform.appendChild(e);
                     e.files = es[i].files;
-                } else
+                } else {
                     bgform.appendChild(hidden_input(es[i].name, es[i].value));
+                }
                 if (es[i].hasAttribute("data-bulkwarn")
                     || (es[i].tagName === "SELECT"
                         && es[i].selectedIndex >= 0
@@ -10552,13 +11827,15 @@ handle_ui.on("js-submit-list", function (evt) {
 });
 
 
-handle_ui.on("js-unfold-pcselector", function () {
-    removeClass(this, "js-unfold-pcselector");
-    var $pc = $(this).find("select[data-pcselector-options]");
-    if ($pc.length)
-        demand_load.pc().then(function (pcs) {
-            $pc.each(function () { populate_pcselector.call(this, pcs); });
-        });
+handle_ui.on("foldtoggle.js-unfold-pcselector", function (evt) {
+    if (evt.which.open) {
+        removeClass(this, "js-unfold-pcselector");
+        var $pc = $(this).find("select[data-pcselector-options]");
+        if ($pc.length)
+            demand_load.pc().then(function (pcs) {
+                $pc.each(function () { populate_pcselector.call(this, pcs); });
+            });
+    }
 });
 
 
@@ -10617,7 +11894,7 @@ function populate_pcselector(pcs) {
     removeClass(this, "need-pcselector");
     var optids = this.getAttribute("data-pcselector-options") || "*";
     if (optids.charAt(0) === "[")
-        optids = parse_json(optids);
+        optids = JSON.parse(optids);
     else
         optids = optids.split(/[\s,]+/);
     var selected = this.getAttribute("data-pcselector-selected"), selindex = -1;
@@ -10701,83 +11978,39 @@ $(function () {
 
 
 // score information
-var make_score_info = (function () {
+var make_color_scheme = (function () {
 var scheme_info = {
     sv: [0, 9], svr: [1, 9, "sv"], bupu: [0, 9], pubu: [1, 9, "bupu"],
     orbu: [0, 9], buor: [1, 9, "orbu"], viridis: [0, 9], viridisr: [1, 9, "viridis"],
     pkrd: [0, 9], rdpk: [1, 9, "pkrd"], turbo: [0, 9], turbor: [1, 9, "turbo"],
     catx: [2, 10], none: [2, 1]
-}, sccolor = {}, info = {};
+}, sccolor = {};
 
-function make_fm9(n, max, rev, categorical) {
+function make_fm9(n, max, flip, categorical) {
     if (n <= 1 || max <= 1) {
-        return function () { return rev ? 1 : max; };
+        return function () {
+            return flip ? 1 : max;
+        };
+    } else if (categorical && flip) {
+        return function (i) {
+            return Math.round(n - i) % max + 1;
+        };
     } else if (categorical) {
         return function (i) {
-            var x = Math.round(+i - 1) % max;
-            return rev ? max - x : x + 1;
+            return Math.round(+i - 1) % max + 1;
         };
     } else {
         var f = (max - 1) / (n - 1);
-        return function (i) {
-            var x = Math.max(Math.min(Math.round((+i - 1) * f), max - 1), 0);
-            return rev ? max - x : x + 1;
-        };
+        if (flip) {
+            return function (i) {
+                return Math.max(Math.min(Math.round((n - i) * f) + 1, max), 1);
+            };
+        } else {
+            return function (i) {
+                return Math.max(Math.min(Math.round((+i - 1) * f) + 1, max), 1);
+            };
+        }
     }
-}
-
-function numeric_unparser(val) {
-    return val.toFixed(val == Math.round(val) ? 0 : 2);
-}
-
-function numeric_parser(text) {
-    return parseInt(text, 10);
-}
-
-function gcd(a, b) {
-    if (a == b)
-        return a;
-    else if (a > b)
-        return gcd(a - b, b);
-    else
-        return gcd(a, b - a);
-}
-
-function make_letter_unparser(n, c) {
-    return function (val, count) {
-        if (val < 0.8 || val > n + 0.2)
-            return val.toFixed(2);
-        var ival = Math.ceil(val), ch1 = String.fromCharCode(c + n - ival);
-        if (val == ival)
-            return ch1;
-        var ch2 = String.fromCharCode(c + n - ival + 1);
-        count = count || 2;
-        val = Math.floor((ival - val) * count + 0.5);
-        if (val <= 0 || val >= count)
-            return val <= 0 ? ch1 : ch2;
-        var g = gcd(val, count);
-        for (var i = 0, s = ""; i < count; i += g)
-            s += i < val ? ch1 : ch2;
-        return s;
-    };
-}
-
-function make_letter_parser(n, c) {
-    return function (text) {
-        var ch;
-        text = text.toUpperCase();
-        if (text.length == 1 && (ch = text.charCodeAt(0)) >= c && ch < c + n)
-            return n - (ch - c);
-        else
-            return null;
-    };
-}
-
-function make_value_order(n, c) {
-    var o = [], i;
-    for (i = c ? n : 1; i >= 1 && i <= n; i += (c ? -1 : 1))
-        o.push(i);
-    return o;
 }
 
 function rgb_array_for(svx) {
@@ -10794,13 +12027,10 @@ function rgb_array_for(svx) {
     return sccolor[svx];
 }
 
-function make_info(n, c, sv) {
-    if (c === 1)
-        c = null;
-    var unparse = c ? make_letter_unparser(n, c) : numeric_unparser,
-        sci = scheme_info[sv],
-        fm9 = make_fm9(n, sci[1], !sci[2] !== !c, (sci[0] & 2) !== 0),
-        svk = sci[2] || sv;
+return function (n, scheme, flip) {
+    var sci = scheme_info[scheme],
+        fm9 = make_fm9(n, sci[1], !sci[2] !== !flip, (sci[0] & 2) !== 0),
+        svk = sci[2] || scheme;
     if (svk !== "sv")
         svk = "sv-" + svk;
     function rgb_array(val) {
@@ -10814,39 +12044,10 @@ function make_info(n, c, sv) {
             var x = rgb_array(val);
             return sprintf("#%02x%02x%02x", x[0], x[1], x[2]);
         },
-        unparse: unparse,
-        unparse_html: function (val) {
-            if (val >= 0.95 && val <= n + 0.05)
-                return '<span class="sv '.concat(svk, fm9(val), '">', unparse(val), '</span>');
-            else
-                return numeric_unparser(val);
-        },
-        unparse_revnum: function (val) {
-            if (val >= 1 && val <= n)
-                return '<strong class="rev_num sv '.concat(svk, fm9(val), '">', unparse(val), '.</strong>');
-            else
-                return '<strong class="rev_num">?'.concat(numeric_unparser(val), '.</strong>');
-        },
-        parse: c ? make_letter_parser(n, c) : numeric_parser,
-        value_order: function () {
-            return make_value_order(n, c);
-        },
         className: function (val) {
             return svk + fm9(val);
         }
     };
-}
-
-return function (n, c, sv) {
-    if (typeof c === "string")
-        c = c.charCodeAt(0);
-    if (sv && sv.startsWith("sv-"))
-        sv = sv.substring(3);
-    sv = sv && scheme_info[sv] ? sv : "sv";
-    var name = "".concat(n, "/", c || "", "/", sv);
-    if (!info[name])
-        info[name] = make_info(n || 1, c || "", sv);
-    return info[name];
 };
 })();
 
@@ -10880,33 +12081,38 @@ function setup_canvas(canvas, w, h) {
 }
 
 function analyze_sc(sc) {
-    var anal = {v: [], max: 0, h: 0, c: 0, sum: 0, sv: "sv"}, m, i, vs, x;
+    var anal = {
+        v: [], max: 0, h: null, lo: 1, hi: 0, flip: false, sum: 0, sv: "sv"
+    }, m, i, vs, x;
 
     m = /(?:^|[&;])v=(.*?)(?:[&;]|$)/.exec(sc);
     vs = m[1].split(/,/);
-    for (i = 0; i < vs.length; ++i) {
+    anal.hi = vs.length;
+    for (i = 0; i !== vs.length; ++i) {
         if (/^\d+$/.test(vs[i]))
             x = parseInt(vs[i], 10);
         else
             x = 0;
-        anal.v[i + 1] = x;
+        anal.v.push(x);
         anal.max = Math.max(anal.max, x);
         anal.sum += x;
     }
 
-    if ((m = /(?:^|[&;])h=(\d+)(?:[&;]|$)/.exec(sc)))
-        anal.h = parseInt(m[1], 10);
-
-    x = 0;
-    if ((m = /(?:^|[&;])c=([A-Z])(?:[&;]|$)/.exec(sc))) {
-        anal.c = m[1].charCodeAt(0);
-        x = String.fromCharCode(anal.c + 2 - anal.v.length);
+    if ((m = /(?:^|[&;])h=(\d+(?:,\d+)*)(?:[&;]|$)/.exec(sc))) {
+        x = m[1].split(",");
+        anal.h = [];
+        for (i = 0; i !== x.length; ++i)
+            anal.h.push(parseInt(x[i], 10))
     }
-
+    if ((m = /(?:^|[&;])lo=([^&;\s]+)/.exec(sc)))
+        anal.lo = m[1];
+    if ((m = /(?:^|[&;])hi=([^&;\s]+)/.exec(sc)))
+        anal.hi = m[1];
+    anal.flip = /(?:^|[&;])flip=[^0&;]/.test(sc);
     if ((m = /(?:^|[&;])sv=([^;&]*)(?:[&;]|$)/.exec(sc)))
         anal.sv = decodeURIComponent(m[1]);
 
-    anal.fx = make_score_info(vs.length, x, anal.sv);
+    anal.fx = make_color_scheme(vs.length, anal.sv, anal.flip);
     return anal;
 }
 
@@ -10920,43 +12126,49 @@ function color_unparse(a) {
 }
 
 function scorechart1_s1(sc) {
-    var anal = analyze_sc(sc), blocksize = 3, blockpad = 2, blockfull = blocksize + blockpad;
-    var cwidth = blockfull * (anal.v.length - 1) + blockpad + 1;
-    var cheight = blockfull * Math.max(anal.max, 1) + blockpad + 1;
+    var anal = analyze_sc(sc), n = anal.v.length,
+        blocksize = 3, blockpad = 2, blockfull = blocksize + blockpad,
+        cwidth = blockfull * n + blockpad + 1,
+        cheight = blockfull * Math.max(anal.max, 1) + blockpad + 1,
+        gray = color_unparse(graycolor);
 
-    var t = '<svg width="' + cwidth + '" height="' + cheight + '" style="font:6.5px Menlo, Monaco, source-code-pro, Consolas, Terminal, monospace;user-select:none">';
-    var gray = color_unparse(graycolor);
-    t += '<path style="stroke:' + gray + ';fill:none" d="M0.5 ' + (cheight - blockfull - 1) + 'v' + (blockfull + 0.5) + 'h' + (cwidth - 1) + 'v' + -(blockfull + 0.5) + '" />';
+    var svg = svge("svg", "class", "scorechart-s1", "width", cwidth, "height", cheight),
+        path = svge("path", "stroke", gray, "fill", "none", "d", "M0.5 ".concat(cheight - blockfull - 1, "v", blockfull + 0.5, "h", cwidth - 1, "v", -(blockfull + 0.5))),
+        text;
+    svg.appendChild(path);
 
-    if (anal.c ? !anal.v[anal.v.length - 1] : !anal.v[1])
-        t += '<text x="' + blockpad + '" y="' + (cheight - 2) + '" fill="' + gray + '">' +
-            (anal.c ? String.fromCharCode(anal.c - anal.v.length + 2) : 1) + '</text>';
-    if (anal.c ? !anal.v[1] : !anal.v[anal.v.length - 1])
-        t += '<text x="' + (cwidth - 1.75) + '" y="' + (cheight - 2) + '" text-anchor="end" fill="' + gray + '">' +
-            (anal.c ? String.fromCharCode(anal.c) : anal.v.length - 1) + '</text>';
-
-    function rectd(x, y) {
-        return 'M' + (blockfull * x - blocksize) + ' ' + (cheight - 1 - blockfull * y)
-            + 'h' + (blocksize + 1) + 'v' + (blocksize + 1) + 'h' + -(blocksize + 1) + 'z';
+    if (!anal.v[anal.flip ? n - 1 : 0]) {
+        text = svge("text", "x", blockpad, "y", cheight - 2, "fill", gray);
+        text.append(anal.lo);
+        svg.appendChild(text);
+    }
+    if (!anal.v[anal.flip ? 0 : n - 1]) {
+        text = svge("text", "x", cwidth - 1.75, "y", cheight - 2, "text-anchor", "end", "fill", gray);
+        text.append(anal.hi);
+        svg.appendChild(text);
     }
 
-    for (var x = 1; x < anal.v.length; ++x) {
-        var vindex = anal.c ? anal.v.length - x : x;
+    function rectd(x, y) {
+        return 'M'.concat(blockfull * x + blockpad, ' ', cheight - 1 - blockfull * y, 'h', blocksize + 1, 'v', blocksize + 1, 'h', -(blocksize + 1), 'z');
+    }
+
+    for (var x = 0; x < n; ++x) {
+        var vindex = anal.flip ? n - x - 1 : x;
         if (!anal.v[vindex])
             continue;
-        var color = anal.fx.rgb_array(vindex);
-        var y = vindex == anal.h ? 2 : 1;
-        if (y == 2)
-            t += '<path style="fill:' + color_unparse(rgb_interp(blackcolor, color, 0.5)) + '" d="' + rectd(x, 1) + '" />';
+        var color = anal.fx.rgb_array(vindex + 1), t,
+            y = anal.h && anal.h.indexOf(vindex + 1) >= 0 ? 2 : 1;
+        if (y === 2)
+            svg.appendChild(svge("path", "fill", color_unparse(rgb_interp(blackcolor, color, 0.5)), "d", rectd(x, 1)));
         if (y <= anal.v[vindex]) {
-            t += '<path style="fill:' + color_unparse(color) + '" d="';
+            t = "";
             for (; y <= anal.v[vindex]; ++y)
                 t += rectd(x, y);
-            t += '" />';
+            svg.appendChild(svge("path", "fill", color_unparse(color), "d", t));
         }
     }
 
-    return $(t + '</svg>')[0];
+    return svg;
 }
 
 function scorechart1_s2(sc) {
@@ -10965,11 +12177,11 @@ function scorechart1_s2(sc) {
         cwidth = 64, cheight = 8,
         x, vindex, pos = 0, x1 = 0, x2;
     ctx = setup_canvas(canvas, cwidth, cheight);
-    for (x = 1; x < anal.v.length; ++x) {
-        vindex = anal.c ? anal.v.length - x : x;
+    for (x = 0; x < anal.v.length; ++x) {
+        vindex = anal.flip ? anal.v.length - x - 1 : x;
         if (!anal.v[vindex])
             continue;
-        ctx.fillStyle = color_unparse(anal.fx.rgb_array(vindex));
+        ctx.fillStyle = color_unparse(anal.fx.rgb_array(vindex + 1));
         pos += anal.v[vindex];
         x2 = Math.round((cwidth + 1) * pos / anal.sum);
         if (x2 > x1)
@@ -10985,9 +12197,9 @@ function scorechart1() {
         && this.firstChild.getAttribute("data-scorechart") === sc)
         return;
     this.replaceChildren();
-    if (/.*&s=1$/.test(sc) && has_canvas)
+    if (sc.endsWith("&s=1") && has_canvas)
         e = scorechart1_s1(sc);
-    else if (/.*&s=2$/.test(sc) && has_canvas)
+    else if (sc.endsWith("&s=2") && has_canvas)
         e = scorechart1_s2(sc);
     else {
         e = document.createElement("img");
@@ -11027,7 +12239,7 @@ function load_more_events() {
 function render_events(e, rows) {
     var j = $(e).find("tbody");
     if (!j.length) {
-        $(e).append("<div class=\"eventtable\"><table class=\"pltable\"><tbody class=\"pltable\"></tbody></table></div><div class=\"g eventtable-more\"><button type=\"button\">More</button></div>");
+        $(e).append("<div class=\"eventtable\"><table class=\"pltable\"><tbody class=\"pltable-tbody\"></tbody></table></div><div class=\"g eventtable-more\"><button type=\"button\">More</button></div>");
         $(e).find("button").on("click", load_more_events);
         j = $(e).find("tbody");
     }
@@ -11039,10 +12251,12 @@ function render_events(e, rows) {
         j.append("<tr><td>No recent activity in papers you’re following</td></tr>");
 }
 
-handle_ui.on("js-open-activity", function () {
-    removeClass(this, "js-open-activity");
-    $("<div class=\"fx20 has-events\"></div>").appendTo(this);
-    events ? render_events(this, events) : load_more_events();
+handle_ui.on("js-open-activity", function (evt) {
+    if (evt.which.open) {
+        removeClass(this, "js-open-activity");
+        $("<div class=\"fx20 has-events\"></div>").appendTo(this);
+        events ? render_events(this, events) : load_more_events();
+    }
 });
 })(jQuery);
 
@@ -11066,91 +12280,71 @@ function textarea_shadow($self, width) {
 
 (function ($) {
 var autogrowers = null;
+function computed_line_height(css) {
+    var lh = css.lineHeight;
+    return parseFloat(lh) * (lh.endsWith("px") ? 1 : parseFloat(css.fontSize));
+}
 function resizer() {
     for (var i = autogrowers.length - 1; i >= 0; --i)
         autogrowers[i]();
 }
-function remover($self, shadow) {
-    var f = $self.data("autogrower");
-    $self.removeData("autogrower");
-    shadow && shadow.remove();
-    for (var i = autogrowers.length - 1; i >= 0; --i)
-        if (autogrowers[i] === f) {
-            autogrowers[i] = autogrowers[autogrowers.length - 1];
-            autogrowers.pop();
-        }
+function autogrower_retry(f, e) {
+    $(e).data("autogrower") === f && f(null);
 }
-function make_textarea_autogrower($self) {
-    var shadow, minHeight, lineHeight;
-    return function (evt) {
-        if (evt === false)
-            return remover($self, shadow);
-        var width = $self.width();
-        if (width <= 0)
-            return;
-        if (!shadow) {
-            shadow = textarea_shadow($self, width);
-            minHeight = $self.height();
-            lineHeight = shadow.text("!").height();
+function make_textarea_autogrower(e) {
+    var state = 0, minHeight, lineHeight, borderPadding, timeout = 0;
+    function f(evt) {
+        if (state === 0) {
+            if (e.scrollWidth <= 0) {
+                timeout = Math.min(Math.max(1, timeout) * 2, 30000);
+                setTimeout(autogrower_retry, timeout, f, e);
+                return;
+            }
+            var css = window.getComputedStyle(e);
+            minHeight = parseFloat(css.height);
+            lineHeight = computed_line_height(css);
+            borderPadding = parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth);
+            state = 1;
         }
-
-        // Did enter get pressed?  Resize in this keydown event so that the flicker doesn't occur.
-        var val = $self[0].value;
-        if (evt && evt.type == "keydown" && evt.keyCode === 13)
-            val += "\n";
-        shadow.css("width", width).text(val + "...");
-
-        var wh = Math.max($(window).height() - 4 * lineHeight, 4 * lineHeight);
-        $self.height(Math.min(wh, Math.max(shadow.height(), minHeight)));
-    };
+        e.style.height = "auto"; // in case text shrank (scrollHeight always ≥clientHeight)
+        var wh = Math.max(0.8 * window.innerHeight, 4 * lineHeight);
+        e.style.height = Math.min(wh, Math.max(e.scrollHeight + borderPadding, minHeight)) + "px";
+    }
+    return f;
 }
-function make_input_autogrower($self) {
-    var shadow;
-    return function (evt) {
-        if (evt === false) {
-            return remover($self, shadow);
-        }
-        var width = 0, p;
-        try {
-            width = $self.outerWidth();
-        } catch (e) { // IE11 is annoying here
-        }
-        if (width <= 0) {
-            return;
-        }
-        if (!shadow) {
-            shadow = textarea_shadow($self, width);
-            p = $self.css(["paddingRight", "paddingLeft", "borderLeftWidth", "borderRightWidth", "minWidth", "maxWidth"]);
-            shadow.css({
-                width: "auto",
-                display: "table-cell",
-                paddingLeft: (parseFloat(p.paddingRight) + parseFloat(p.paddingLeft) + parseFloat(p.borderLeftWidth) + parseFloat(p.borderRightWidth)) + "px"
-            });
-            if (p.minWidth == "0px") {
-                $self.css("minWidth", width + "px");
+function make_input_autogrower(e) {
+    var state = 0, minWidth, borderPadding, timeout = 0;
+    function f(evt) {
+        if (state === 0) {
+            if (e.scrollWidth <= 0) {
+                timeout = Math.min(Math.max(1, timeout) * 2, 30000);
+                setTimeout(autogrower_retry, timeout, f, e);
+                return;
             }
-            if (p.maxWidth == "none" && !$self.hasClass("wide")) {
-                $self.css("maxWidth", "640px");
-            }
+            var css = window.getComputedStyle(e);
+            minWidth = parseFloat(css.width);
+            borderPadding = parseFloat(css.borderLeftWidth) + parseFloat(css.borderRightWidth) + parseFloat(css.fontSize) * 0.25;
+            state = 1;
         }
-        shadow.text($self[0].value + "  ");
-        p = $self.css(["minWidth", "maxWidth"]);
-        var outerWidth = Math.min(shadow.outerWidth(), $(window).width()),
-            maxWidth = parseFloat(p.maxWidth);
-        if (maxWidth === maxWidth) { // i.e., isn't NaN
-            outerWidth = Math.min(outerWidth, maxWidth);
+        var parent = e.closest(".main-column, .modal-dialog"),
+            ww = Math.max(0.9 * (parent ? parent.scrollWidth : window.innerWidth), 100),
+            ws = e.scrollWidth;
+        if (ws > minWidth || ws > ww) {
+            e.style.width = minWidth + "px"; // in case text shrank (scrollWidth always ≥clientWidth)
+            ws = e.scrollWidth;
+            e.style.width = Math.min(ww, ws > minWidth ? ws + borderPadding : minWidth) + "px";
         }
-        $self.outerWidth(Math.max(outerWidth, parseFloat(p.minWidth)));
-    };
+    }
+    return f;
 }
 $.fn.autogrow = function () {
     this.each(function () {
         var $self = $(this), f = $self.data("autogrower");
         if (!f) {
             if (this.tagName === "TEXTAREA") {
-                f = make_textarea_autogrower($self);
+                f = make_textarea_autogrower(this);
             } else if (this.tagName === "INPUT" && this.type === "text") {
-                f = make_input_autogrower($self);
+                f = make_input_autogrower(this);
             }
             if (f) {
                 $self.data("autogrower", f).on("change input", f);
@@ -11170,8 +12364,14 @@ $.fn.autogrow = function () {
 };
 $.fn.unautogrow = function () {
     this.each(function () {
-        var f = $(this).data("autogrower");
-        f && f(false);
+        var f = $(this).data("autogrower"), i;
+        if (f) {
+            $(this).removeData("autogrower");
+            if ((i = autogrowers.indexOf(f)) >= 0) {
+                autogrowers[i] = autogrowers[autogrowers.length - 1];
+                autogrowers.pop();
+            }
+        }
     });
     return this;
 };
@@ -11182,9 +12382,9 @@ $.fn.awaken = function () {
         if (hasClass(this, "need-autogrow"))
             $(this).autogrow();
         if (hasClass(this, "need-suggest"))
-            suggest.call(this);
+            hotcrp.suggest.call(this);
         if (hasClass(this, "need-tooltip"))
-            tooltip.call(this);
+            hotcrp.tooltip.call(this);
     });
     return this;
 };
@@ -11193,7 +12393,7 @@ $(function () { $(document.body).awaken(); });
 
 $(function () {
     var err = [], elt = [];
-    $("div.info,div.warning,div.confirm,div.merror,div.help,.xinfo,.xconfirm,.xwarning,.xmerror,.aa,.strong").each(function () {
+    $(".xinfo,.xconfirm,.xwarning,.xmerror,.aa,.strong,td.textarea,button.btn-link,button.btn-qlink,button.btn-qolink,.btn-xlink,.btn-disabled").each(function () {
         err.push(this.tagName.concat(".", this.className.replace(/\s+/g, ".")));
     });
     $("a.btn[href='']").each(function () {
@@ -11209,22 +12409,25 @@ $(function () {
         log_jserror(err.join("\n"));
     }
     if (document.documentMode || window.attachEvent) {
-        var msg = $('<div class="msg msg-error"></div>').appendTo("#msgs-initial");
+        var msg = $('<div class="msg msg-error"></div>').appendTo("#h-messages");
         append_feedback_near(msg[0], {message: "<0>This site no longer supports Internet Explorer", status: 2});
-        append_feedback_near(msg[0], {message: "<5>Please use <a href=\"https://browsehappy.com/\">a modern browser</a> if you can.", status: -5});
+        append_feedback_near(msg[0], {message: "<5>Please use <a href=\"https://browsehappy.com/\">a modern browser</a> if you can.", status: -5 /*MessageSet::INFORM*/});
     }
 });
 
 
-window.hotcrp = {
-    add_comment: papercomment.add,
-    add_review: review_form.add_review,
-    add_preference_ajax: add_revpref_ajax,
+Object.assign(window.hotcrp, {
+    // add_comment
+    // add_review
+    // add_preference_ajax
     check_version: check_version,
     demand_load: demand_load,
-    edit_comment: papercomment.edit,
+    // drag_block_reorder
+    // dropmenu
+    // edit_comment
     ensure_pattern: ensure_pattern,
     escape_html: escape_html,
+    // evaluate_edit_condition
     focus_within: focus_within,
     fold: fold,
     fold_storage: fold_storage,
@@ -11232,19 +12435,24 @@ window.hotcrp = {
     handle_ui: handle_ui,
     highlight_form_children: hiliter_children,
     hoturl: hoturl,
-    init_deadlines: function (dlx) { hotcrp_deadlines.load(dlx, true); },
-    load_editable_paper: edit_paper_ui.load,
-    load_editable_review: edit_paper_ui.load_review,
-    onload: hotcrp_load,
-    paper_edit_conditions: edit_paper_ui.edit_condition,
-    prepare_editable_paper: edit_paper_ui.prepare,
-    render_list: plinfo.render_needed,
+    // init_deadlines
+    // load_editable_paper
+    // load_editable_review
+    // load_paper_sidebar
+    // make_review_field
+    // onload
+    // paper_edit_conditions
+    // render_list
     render_text_page: render_text.on_page,
     render_user: render_user,
-    replace_editable_field: edit_paper_ui.replace_field,
-    scorechart: scorechart,
-    set_response_round: papercomment.set_resp_round,
-    set_review_form: review_form.set_form,
-    tracker_show_elapsed: hotcrp_deadlines.tracker_show_elapsed,
-    shortcut: shortcut
-};
+    // replace_editable_field
+    scorechart: scorechart
+    // set_response_round
+    // set_review_form
+    // set_scoresort
+    // shortcut
+    // suggest
+    // tooltip
+    // tracker_show_elapsed
+    // update_tag_decoration
+});

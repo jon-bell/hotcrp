@@ -1,6 +1,6 @@
 <?php
 // settingvalues.php -- HotCRP conference settings manager
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class SettingValues extends MessageSet {
     /** @var Conf
@@ -94,7 +94,11 @@ class SettingValues extends MessageSet {
 
     /** @param Qrequest|array<string,string|int|float> $qreq */
     static function make_request(Contact $user, $qreq) {
-        return (new SettingValues($user))->add_request($qreq);
+        $sv = (new SettingValues($user))->add_request($qreq);
+        if (!$sv->has_req("reset")) {
+            $sv->set_req("reset", "");
+        }
+        return $sv;
     }
 
     /** @param string $page
@@ -185,7 +189,7 @@ class SettingValues extends MessageSet {
     function add_json_string($jstr, $filename = null) {
         assert($this->_use_req === true);
         assert(empty($this->_oblist_ensured));
-        $this->_jp = (new JsonParser($jstr))->flags(JsonParser::JSON_ALLOW_NBSP)->filename($filename);
+        $this->_jp = (new JsonParser($jstr))->flags(JsonParser::JSON5)->filename($filename);
         $j = $this->_jp->decode();
         if ($j !== null || $this->_jp->error_type === 0) {
             $this->_jpath = "";
@@ -471,17 +475,9 @@ class SettingValues extends MessageSet {
                 $loc = $si ? $si->title_html($this) : "";
                 if ($this->link_json) {
                     $jpath = ($si ? $si->json_path() : null) ?? Si::json_path_for($mi->field);
-                    if ($jpath) {
-                        $hjpath = htmlspecialchars($jpath);
-                        if ($loc) {
-                            $loc = "<u>{$loc}</u> <code class=\"settings-jpath\">{$hjpath}</code>";
-                        } else {
-                            $loc = "<code class=\"settings-jpath\">{$hjpath}</code>";
-                        }
-                        $loc = "<a href=\"\" class=\"ui js-settings-jpath noul\">{$loc}</a>";
-                    }
-                } else if ($loc && $si->has_hashid()) {
-                    $loc = Ht::link($loc, $si->sv_hoturl($this));
+                    $loc = $this->json_path_link($loc, $jpath);
+                } else if ($loc !== "" && $si->has_hashid()) {
+                    $loc = $this->setting_link($loc, $si);
                 }
             }
             if ($lastmi
@@ -510,6 +506,10 @@ class SettingValues extends MessageSet {
             $msgs[] = $mi;
         }
         $this->conf->feedback_msg($msgs);
+    }
+
+    function decorated_feedback_text() {
+        return self::feedback_text($this->decorated_message_list());
     }
 
     /** @return SettingParser */
@@ -835,7 +835,8 @@ class SettingValues extends MessageSet {
         // decide whether to mark unmentioned objects as deleted
         if ($this->_use_req) {
             $resetn = $this->has_req("{$pfx}_reset") ? "{$pfx}_reset" : "reset";
-            $reset = ($this->reqstr($resetn) ?? "") !== "";
+            $resets = $this->reqstr($resetn) ?? "1";
+            $reset = $resets !== "" && $resets !== "0";
         } else {
             $reset = false;
         }
@@ -1494,7 +1495,7 @@ class SettingValues extends MessageSet {
     }
 
     /** @return list<string> */
-    function updated_fields() {
+    function changed_keys() {
         return array_keys($this->_diffs);
     }
 
@@ -1504,11 +1505,21 @@ class SettingValues extends MessageSet {
      * @return string */
     function setting_link($html, $id, $js = null) {
         $si = is_string($id) ? $this->si($id) : $id;
-        $link = Ht::link($html, $si->sv_hoturl($this), $js);
         if ($this->link_json && ($jpath = $si->json_path())) {
-            $link .= " <code class=\"settings-jpath\">" . htmlspecialchars($jpath) . "</code>";
+            return $this->json_path_link($html, $jpath, $js);
+        } else {
+            return Ht::link($html, $si->sv_hoturl($this), $js);
         }
-        return $link;
+    }
+
+    /** @param string $html
+     * @param string $jpath
+     * @return string */
+    function json_path_link($html, $jpath, $js = null) {
+        $lpfx = $html !== "" ? "<u>{$html}</u> " : "";
+        $hjpath = htmlspecialchars($jpath);
+        $lpath = "<code class=\"settings-jpath\">{$hjpath}</code>";
+        return "<a href=\"\" class=\"ui js-settings-jpath noul\">{$lpfx}{$lpath}</a>";
     }
 
     /** @param string $html
@@ -1592,8 +1603,9 @@ class SettingValues extends MessageSet {
             }
         }
         foreach ($js ?? [] as $k => $v) {
-            if (strlen($k) < 10
-                || ($k !== "horizontal" && strpos($k, "_") === false))
+            if (strlen($k) >= 10
+                ? $k !== "horizontal" && strpos($k, "_") === false
+                : $k !== "hint")
                 $x[$k] = $v;
         }
         if ($this->has_problem_at($name)) {
@@ -1652,12 +1664,17 @@ class SettingValues extends MessageSet {
      * @param string $hint
      * @return void */
     function print_checkbox($name, $text, $js = null, $hint = "") {
+        // XXX $hint deprecated
+        if ($hint !== "") {
+            error_log(debug_string_backtrace());
+        }
         $js = $js ?? [];
         $this->print_group_open($name, "checki", $js + ["no_control_class" => true]);
         echo '<span class="checkc">';
         $this->print_checkbox_only($name, $js);
         echo '</span>', $this->label($name, $text, ["for" => $name, "class" => $js["label_class"] ?? null]);
         $this->print_feedback_at($name);
+        $hint = (string) $hint === "" ? $js["hint"] ?? "" : $hint;
         if ($hint) {
             echo '<div class="', Ht::add_tokens("settings-ap f-hx", $js["hint_class"] ?? null), '">', $hint, '</div>';
         }
@@ -1759,10 +1776,11 @@ class SettingValues extends MessageSet {
     /** @param string|Si $id
      * @param string $description
      * @param string $control
-     * @param ?array<string,mixed> $js
-     * @param string $hint */
-    function print_control_group($id, $description, $control,
-                                 $js = null, $hint = "") {
+     * @param ?array<string,mixed> $js */
+    function print_control_group($id, $description, $control, $js = null, $hint = "") {
+        if ($hint !== "") {
+            error_log(debug_string_backtrace());
+        }
         $si = is_string($id) ? $this->si($id) : $id;
         $horizontal = !!($js["horizontal"] ?? false);
         $this->print_group_open($si->name, $horizontal ? "entryi" : "f-i", $js);
@@ -1782,7 +1800,8 @@ class SettingValues extends MessageSet {
         } else {
             $this->print_feedback_at($si->name);
         }
-        echo $control, ($js["control_after"] ?? "");
+        echo $control, $js["control_after"] ?? "";
+        $hint = (string) $hint === "" ? $js["hint"] ?? "" : $hint;
         $thint = $this->type_hint($si->type);
         if ($hint || $thint) {
             echo '<div class="f-h">';
@@ -1794,18 +1813,24 @@ class SettingValues extends MessageSet {
             echo '</div>';
         }
         if (!($js["group_open"] ?? null)) {
-            echo $horizontal ? "</div></div>\n" : "</div>\n";
+            $this->print_close_control_group($js);
         }
+    }
+
+    /** @param ?array<string,mixed> $js
+     * @return void */
+    function print_close_control_group($js) {
+        $horizontal = !!($js["horizontal"] ?? false);
+        echo $horizontal ? "</div></div>\n" : "</div>\n";
     }
 
     /** @param string $name
      * @param ?array<string,mixed> $js
-     * @param string $hint
      * @return void */
     function print_entry_group($name, $description, $js = null, $hint = "") {
+        // XXX $hint deprecated
         $this->print_control_group($name, $description,
-            $this->entry($name, $js),
-            $js, $hint);
+            $this->entry($name, $js), $js, $hint);
     }
 
     /** @param string $name
@@ -1821,12 +1846,11 @@ class SettingValues extends MessageSet {
     /** @param string $name
      * @param string $description
      * @param array $values
-     * @param ?array<string,mixed> $js
-     * @param string $hint */
+     * @param ?array<string,mixed> $js */
     function print_select_group($name, $description, $values, $js = null, $hint = "") {
+        // XXX $hint deprecated
         $this->print_control_group($name, $description,
-            $this->select($name, $values, $js),
-            $js, $hint);
+            $this->select($name, $values, $js), $js, $hint);
     }
 
     /** @param string $name
@@ -1855,12 +1879,11 @@ class SettingValues extends MessageSet {
 
     /** @param string $name
      * @param ?array<string,mixed> $js
-     * @param string $hint
      * @return void */
     function print_textarea_group($name, $description, $js = null, $hint = "") {
+        // XXX $hint deprecated
         $this->print_control_group($name, $description,
-            $this->textarea($name, $js),
-            $js, $hint);
+            $this->textarea($name, $js), $js, $hint);
     }
 
     /** @param string $name
@@ -1870,8 +1893,8 @@ class SettingValues extends MessageSet {
     private function print_message_base($name, $description, $hint, $xclass) {
         $si = $this->si($name);
         $current = $this->vstr($si);
-        $description = '<a class="ui q js-foldup" href="">'
-            . expander(null, 0) . $description . '</a>';
+        $description = '<button type="button" class="q ui js-foldup">'
+            . expander(null, 0) . $description . '</button>';
         echo '<div class="f-i has-fold fold',
             ($current == $si->default_value($this) ? "c" : "o"), '">',
             '<div class="f-c', $xclass, ' ui js-foldup">',
@@ -1906,8 +1929,8 @@ class SettingValues extends MessageSet {
             echo '<div class="entryi">', $this->label($name, $description), '<div>';
             $close = "";
         } else {
-            $description = '<a class="ui q js-foldup href="">'
-                . expander(null, 0) . $description . '</a>';
+            $description = '<button type="button" class="q ui js-foldup">'
+                . expander(null, 0) . $description . '</button>';
             echo '<div class="entryi has-fold foldc">',
                 $this->label($name, $description), '<div>',
                 '<div class="dim ui js-foldup fn">default</div>',

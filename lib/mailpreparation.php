@@ -1,6 +1,6 @@
 <?php
 // mailpreparation.php -- HotCRP prepared mail
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class MailPreparation implements JsonSerializable {
     /** @var Conf */
@@ -29,6 +29,8 @@ class MailPreparation implements JsonSerializable {
     public $reset_capability;
     /** @var ?string */
     public $landmark;
+    /** @var bool */
+    public $finalized = false;
 
     /** @param Conf $conf
      * @param Contact|Author $recipient */
@@ -55,13 +57,13 @@ class MailPreparation implements JsonSerializable {
     /** @param MailPreparation $p
      * @return bool */
     function can_merge($p) {
-        return $this->subject === $p->subject
+        return !$this->unique_preparation
+            && !$p->unique_preparation
+            && $this->subject === $p->subject
             && $this->body === $p->body
             && ($this->headers["cc"] ?? null) == ($p->headers["cc"] ?? null)
             && ($this->headers["reply-to"] ?? null) == ($p->headers["reply-to"] ?? null)
             && $this->preparation_owner === $p->preparation_owner
-            && !$this->unique_preparation
-            && !$p->unique_preparation
             && empty($this->errors)
             && empty($p->errors);
     }
@@ -103,8 +105,16 @@ class MailPreparation implements JsonSerializable {
             || $this->conf->opt("debugShowSensitiveEmail");
     }
 
+    function finalize() {
+        assert(!$this->finalized);
+        $this->finalized = true;
+    }
+
     /** @return bool */
     function send() {
+        if (!$this->finalized) {
+            $this->finalize();
+        }
         if ($this->conf->call_hooks("send_mail", null, $this) === false) {
             return false;
         }

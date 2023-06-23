@@ -1,6 +1,6 @@
 <?php
 // search/st_reconflict.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 abstract class Reconflict_SearchTerm extends SearchTerm {
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
@@ -21,7 +21,11 @@ abstract class Reconflict_SearchTerm extends SearchTerm {
 
         $old_overrides = $srch->user->add_overrides(Contact::OVERRIDE_CONFLICT);
         $cids = [];
-        foreach ($srch->user->paper_set(["paperId" => $st, "reviewSignatures" => true, "finalized" => $srch->limit_submitted()]) as $prow) {
+        foreach ($srch->user->paper_set([
+                "paperId" => $st,
+                "reviewSignatures" => true,
+                "finalized" => $srch->limit_term()->is_submitted()
+            ]) as $prow) {
             if ($srch->user->can_view_paper($prow)) {
                 foreach ($prow->all_reviews() as $rrow) {
                     if ($rrow->reviewToken === 0

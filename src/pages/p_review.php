@@ -1,6 +1,6 @@
 <?php
 // pages/p_review.php -- HotCRP paper review display/edit page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Review_Page {
     /** @var Conf */
@@ -127,7 +127,7 @@ class Review_Page {
         if (($whynot = ($this->rrow
                         ? $this->user->perm_edit_review($this->prow, $this->rrow, true)
                         : $this->user->perm_create_review($this->prow)))) {
-            $rv->msg_at(null, "<5>" . $whynot->unparse_html(), MessageSet::ERROR);
+            $whynot->append_to($rv, null, MessageSet::ERROR);
         } else if ($rv->parse_qreq($this->qreq, !!$this->qreq->override)) {
             if (isset($this->qreq->approvesubreview)
                 && $this->rrow
@@ -174,7 +174,7 @@ class Review_Page {
         $this->conf->make_csvg($filename, CsvGenerator::TYPE_STRING)
             ->set_inline(false)
             ->add_string($rf->text_form_header(false)
-                         . $rf->text_form($this->prow, $this->rrow, $this->user, null))
+                         . $rf->text_form($this->prow, $this->rrow, $this->user))
             ->emit();
         throw new PageCompletion;
     }
@@ -301,9 +301,9 @@ class Review_Page {
     function add_capability_user_message($capuid) {
         if (($u = $this->conf->user_by_id($capuid, USER_SLICE))) {
             if (PaperRequest::simple_qreq($this->qreq)
-                && ($i = $this->user->session_user_index($this->qreq, $u->email)) >= 0) {
+                && ($i = Contact::session_index_by_email($this->qreq, $u->email)) >= 0) {
                 $selfurl = $this->conf->selfurl($this->qreq, null, Conf::HOTURL_SITEREL | Conf::HOTURL_RAW);
-                $this->conf->redirect(Navigation::base_absolute() . "u/{$i}/{$selfurl}");
+                $this->conf->redirect($this->qreq->navigation()->base_absolute() . "u/{$i}/{$selfurl}");
                 return;
             }
 
@@ -393,7 +393,6 @@ class Review_Page {
         $pp->load_prow();
 
         // fix user
-        $user->add_overrides(Contact::OVERRIDE_CHECK_TIME);
         $capuid = $user->capability("@ra{$pp->prow->paperId}");
 
         // action

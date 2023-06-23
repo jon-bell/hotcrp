@@ -1,6 +1,6 @@
 <?php
 // updateschema.php -- HotCRP function for updating old schemata
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class UpdateSchema {
     /** @var Conf */
@@ -984,6 +984,24 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
                 $conf->save_setting("au_seedec", 2);
             }
             $conf->save_setting("rev_seedec", null);
+        }
+
+        // update extrev_view => extrev_seerev, extrev_seerevid
+        if ($conf->sversion <= 273
+            && ($sd = $conf->setting("extrev_view")) !== null) {
+            if ($sd >= 1) {
+                $conf->save_setting("extrev_seerev", 1);
+            }
+            if ($sd >= 2) {
+                $conf->save_setting("extrev_seerevid", 1);
+            }
+            $conf->save_setting("extrev_view", null);
+        }
+
+        // remove has_permtag
+        if ($conf->sversion <= 274
+            && $conf->setting("has_permtag")) {
+            $conf->save_setting("has_permtag", null);
         }
 
         if ($conf->sversion === 6
@@ -2606,6 +2624,23 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         if ($conf->sversion === 270
             && $this->v271_action_log_paper_actions()) {
             $conf->update_schema_version(271);
+        }
+        if ($conf->setting("tracker") !== null) {
+            $conf->save_setting("__tracker", $conf->setting("tracker"), $conf->setting_data("tracker"));
+            $conf->save_setting("tracker", null);
+        }
+        if ($conf->sversion === 271) {
+            $conf->update_schema_version(272);
+        }
+        if ($conf->sversion === 272
+            && $conf->ql_ok("alter table Paper change `size` `size` bigint(11) NOT NULL DEFAULT -1")
+            && $conf->ql_ok("update PaperStorage set size=-1 where size is null or (size=0 and sha1!=x'da39a3ee5e6b4b0d3255bfef95601890afd80709' and sha1!=x'736861322de3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')")
+            && $conf->ql_ok("alter table PaperStorage change `size` `size` bigint(11) NOT NULL DEFAULT -1")) {
+            $conf->update_schema_version(273);
+        }
+        if ($conf->sversion === 273
+            || $conf->sversion === 274) {
+            $conf->update_schema_version(275);
         }
 
         $conf->ql_ok("delete from Settings where name='__schema_lock'");

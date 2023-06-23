@@ -1,12 +1,16 @@
 <?php
 // cap_reviewaccept.php -- HotCRP review-acceptor capability management
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class ReviewAccept_Capability {
     /** @param ReviewInfo $rrow
      * @param bool $create
      * @return ?TokenInfo */
     static function make($rrow, $create) {
+        if ($rrow->reviewId <= 0) {
+            return null;
+        }
+
         $result = $rrow->conf->qe("select * from Capability where salt>=? and salt<?",
             "hcra{$rrow->reviewId}@", "hcra{$rrow->reviewId}~");
         $tok = null;
@@ -60,7 +64,7 @@ class ReviewAccept_Capability {
             }
             if (!$rrow && $user->contactId) {
                 $result = $user->conf->qe("select * from PaperReviewRefused where refusedReviewId=? order by timeRefused desc limit 1", $rrowid);
-                $refused = ReviewRefusalInfo::fetch($result);
+                $refused = ReviewRefusalInfo::fetch($result, $user->conf);
                 Dbl::free($result);
             }
             if ((!$rrow || $rrow->contactId !== $user->contactId)

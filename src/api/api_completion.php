@@ -1,6 +1,6 @@
 <?php
 // api_completion.php -- HotCRP completion API calls
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
 
 class Completion_API {
     /** @param list &$comp
@@ -18,7 +18,7 @@ class Completion_API {
                     $match = $word;
                     break;
                 }
-            $comp[] = $prefix . ($match ? : "\"$str\"");
+            $comp[] = $prefix . ($match ? : "\"{$str}\"");
         }
     }
 
@@ -101,7 +101,7 @@ class Completion_API {
         foreach ($user->user_option_list() as $o) {
             if ($user->can_view_some_option($o)
                 && $o->search_keyword() !== false) {
-                foreach ($o->search_examples($user, PaperOption::EXAMPLE_COMPLETION) as $sex) {
+                foreach ($o->search_examples($user, SearchExample::COMPLETION) as $sex) {
                     $comp[] = $sex->q;
                 }
             }
@@ -156,12 +156,10 @@ class Completion_API {
             && $user->can_view_tags()) {
             $comp[] = ["pri" => -1, "nosort" => true, "i" => ["style:any", "style:none", "color:any", "color:none"]];
             $tagmap = $conf->tags();
-            foreach ($tagmap->canonical_known_styles() as $ks) {
-                if (($ks->sclass & TagStyle::SECRET) === 0) {
-                    $comp[] = "style:{$ks->style}";
-                    if (($ks->sclass & TagStyle::BG) !== 0) {
-                        $comp[] = "color:{$ks->style}";
-                    }
+            foreach ($tagmap->canonical_listed_styles(TagStyle::BG | TagStyle::TEXT) as $ks) {
+                $comp[] = "style:{$ks->style}";
+                if (($ks->sclass & TagStyle::BG) !== 0) {
+                    $comp[] = "color:{$ks->style}";
                 }
             }
         }
@@ -181,8 +179,9 @@ class Completion_API {
                     $cats[$cat] = true;
                 }
             }
+            $xtp = new XtParams($conf, $user);
             foreach ($conf->paper_column_factories() as $fxj) {
-                if ($conf->xt_allowed($fxj, $user)
+                if ($xtp->allowed($fxj)
                     && Conf::xt_enabled($fxj)
                     && isset($fxj->completion_function)) {
                     Conf::xt_resolve_require($fxj);
@@ -212,7 +211,7 @@ class Completion_API {
     /** @param Contact $user
      * @param ?PaperInfo $prow
      * @param int $cvis
-     * @return list<array<Contact|Author>> */
+     * @return list<list<Contact|Author>> */
     static function mention_lists($user, $prow, $cvis) {
         $lists = [];
         if ($prow && $user->can_view_review_assignment($prow, null)) {
@@ -236,11 +235,9 @@ class Completion_API {
                 }
                 if ($viewid
                     && $rrow->contactId !== $user->contactId
-                    && ($cvis >= CommentInfo::CT_REVIEWER || $rrow->reviewType >= REVIEW_PC)
-                    && !$rrow->disablement) {
-                    $au = new Author($rrow);
-                    $au->contactId = $rrow->contactId;
-                    $rlist[] = $au;
+                    && ($cvis >= CommentInfo::CTVIS_REVIEWER || $rrow->reviewType >= REVIEW_PC)
+                    && !$rrow->reviewer()->disablement) {
+                    $rlist[] = $rrow->reviewer();
                 }
             }
             // XXX todo: list previous commentees in privileged position?
@@ -271,7 +268,7 @@ class Completion_API {
      * @param ?PaperInfo $prow */
     static function mentioncompletion_api(Contact $user, $qreq, $prow) {
         $comp = [];
-        $mlists = self::mention_lists($user, $prow, CommentInfo::CT_AUTHOR);
+        $mlists = self::mention_lists($user, $prow, CommentInfo::CTVIS_AUTHOR);
         foreach ($mlists as $i => $mlist) {
             $skey = $i ? "sm1" : "s";
             $pr1 = $i === 0 && count($mlists) > 1;

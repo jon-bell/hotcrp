@@ -1,6 +1,6 @@
 <?php
 // listactions/la_tag.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Tag_ListAction extends ListAction {
     static function render(PaperList $pl, Qrequest $qreq) {
@@ -15,15 +15,15 @@ class Tag_ListAction extends ListAction {
         // tag name cell
         $t = "";
         if ($pl->user->privChair) {
-            $t .= '<span class="fx99"><a class="ui q js-foldup" href="" data-fold-target="0">'
-                . expander(null, 0) . "</a></span>";
+            $t .= '<span class="fx98"><button type="button" class="q ui js-foldup" data-fold-target="99">'
+                . expander(null, 99) . "</button></span>";
         }
-        $t .= 'tag<span class="fn99">(s)</span> &nbsp;'
+        $t .= 'tag<span class="fn98">(s)</span> &nbsp;'
             . Ht::entry("tag", $qreq->tag,
                         ["size" => 15, "class" => "want-focus js-autosubmit js-submit-action-info-tag need-suggest tags", "data-submit-fn" => "tag"])
             . $pl->action_submit("tag");
         if ($pl->user->privChair) {
-            $t .= '<div class="fx"><div style="margin:2px 0">'
+            $t .= '<div class="fx99"><div style="margin:2px 0">'
                 . Ht::checkbox("tagcr_gapless", 1, !!$qreq->tagcr_gapless, ["class" => "ml-0"])
                 . "&nbsp;" . Ht::label("Gapless order") . "</div>"
                 . '<div style="margin:2px 0">Using: &nbsp;'
@@ -35,7 +35,7 @@ class Tag_ListAction extends ListAction {
         }
 
         return [Ht::select("tagfn", $tagopt, $qreq->tagfn, $tagextra) . " &nbsp;",
-            ["linelink-class" => "has-fold foldc fold99c ui-unfold js-tag-list-action", "content" => $t]];
+            ["linelink-class" => "has-fold fold98c fold99c ui-fold js-tag-list-action", "content" => $t]];
     }
     function allow(Contact $user, Qrequest $qreq) {
         return $user->can_edit_some_tag();
@@ -75,11 +75,12 @@ class Tag_ListAction extends ListAction {
             $action = null;
         }
 
-        $assignset = new AssignmentSet($user, Contact::OVERRIDE_CONFLICT);
+        $assignset = new AssignmentSet($user);
+        $assignset->set_overrides(Contact::OVERRIDE_CONFLICT); // i.e., not other overrides
         if (!empty($papers) && $action) {
             foreach ($papers as $p) {
                 foreach ($tags as $t) {
-                    $x[] = "$action,$p,$t\n";
+                    $x[] = "{$action},{$p},{$t}\n";
                 }
             }
             $assignset->parse(join("", $x));
@@ -97,16 +98,16 @@ class Tag_ListAction extends ListAction {
                 $assignset->set_overrides(Contact::OVERRIDE_CONFLICT | Contact::OVERRIDE_TAG_CHECKS);
                 $assignset->parse($r->unparse_assignment());
                 if ($qreq->q === "") {
-                    $qreq->q = "order:$tagreq";
+                    $qreq->q = "order:{$tagreq}";
                 }
             } else {
-                $assignset->error($tagger->error_html());
+                $assignset->error($tagger->error_ftext());
             }
         }
         if ($assignset->is_empty() && $assignset->has_message()) {
             $assignset->prepend_msg("<0>Changes not saved due to errors", 2);
         } else if ($assignset->is_empty()) {
-            $assignset->prepend_msg("<0>No changes", MessageSet::MARKED_NOTE);
+            $assignset->prepend_msg("<0>No changes", MessageSet::WARNING_NOTE);
         } else if ($assignset->has_message()) {
             $assignset->prepend_msg("<0>Some tag assignments ignored because of errors", MessageSet::MARKED_NOTE);
         } else {

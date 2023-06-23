@@ -175,7 +175,7 @@ class UserStatus extends MessageSet {
     }
 
     /** @return ?bool */
-    function xt_allower($e, $xt, Contact $user, Conf $conf) {
+    function xt_allower($e, $xt, $xtp) {
         if ($e === "profile_security") {
             return $this->allow_security();
         } else if ($e === "auth_self") {
@@ -251,8 +251,10 @@ class UserStatus extends MessageSet {
     function autocomplete($what) {
         if ($this->is_auth_self()) {
             return $what;
-        } else if ($what === "email" || $what === "username" || $what === "current-password") {
+        } else if ($what === "email" || $what === "username") {
             return "nope";
+        } else if ($what === "current-password") {
+            return "new-password";
         } else {
             return "off";
         }
@@ -407,7 +409,7 @@ class UserStatus extends MessageSet {
                 if (($tx = $tagger->check($t, Tagger::NOPRIVATE))) {
                     $t1[] = $tx;
                 } else {
-                    $this->error_at($key, "<5>" . $tagger->error_html(true));
+                    $this->error_at($key, $tagger->error_ftext(true));
                 }
             }
         }
@@ -736,7 +738,7 @@ class UserStatus extends MessageSet {
                    && ($old_user->roles & (Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)) !== 0
                    && ($roles & (Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)) === 0) {
             $what = $old_user->roles & Contact::ROLE_CHAIR ? "chair" : "system administration";
-            $this->warning_at("roles", "<0>You can’t drop your own $what privileges. Ask another administrator to do it for you");
+            $this->warning_at("roles", "<0>You can’t drop your own {$what} privileges. Ask another administrator to do it for you");
             $roles |= $old_user->roles & Contact::ROLE_PCLIKE;
         }
         return $roles;
@@ -1518,7 +1520,7 @@ class UserStatus extends MessageSet {
             && !$us->viewer->privChair) {
             return;
         }
-        $cd = $us->conf->_id("conflictdef", "");
+        $cd = $us->conf->_i("conflictdef");
         $us->cs()->add_section_class("w-text")->print_start_section();
         echo '<h3 class="', $us->control_class("collaborators", "form-h"), '">Collaborators and other affiliations</h3>', "\n",
             "<p>List potential conflicts of interest one per line, using parentheses for affiliations and institutions. We may use this information when assigning reviews.<br>Examples: “Ping Yen Zhang (INRIA)”, “All (University College London)”</p>";
@@ -1638,7 +1640,7 @@ topics. We use this information to help match papers to reviewers.</p>',
                 $klass = "ui js-disable-user flex-grow-1 " . ($disablement ? "btn-success" : "btn-danger");
                 $p = "<p class=\"pt-1 mb-0\">Disabled accounts cannot sign in or view the site.";
             } else {
-                $klass = "flex-grow-1 btn-disabled";
+                $klass = "flex-grow-1 disabled";
                 $p = "<p class=\"pt-1 mb-0 feedback is-warning\">Conference settings prevent this account from being enabled.";
             }
             echo Ht::button($disablement ? "Enable account" : "Disable account", [

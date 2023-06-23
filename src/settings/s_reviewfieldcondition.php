@@ -1,6 +1,6 @@
 <?php
 // settings/s_reviewfieldcondition.php -- HotCRP review field conditions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class ReviewFieldCondition_SettingParser extends SettingParser {
     /** @param Conf $conf
@@ -25,7 +25,7 @@ class ReviewFieldCondition_SettingParser extends SettingParser {
 
     /** @return bool */
     static function check_condition(PaperSearch $ps) {
-        foreach ($ps->term()->preorder() as $e) {
+        foreach ($ps->main_term()->preorder() as $e) {
             if ($e instanceof Review_SearchTerm) {
                 $rsm = $e->review_matcher();
                 if ($rsm->sensitivity() & ~(ReviewSearchMatcher::HAS_ROUND | ReviewSearchMatcher::HAS_RTYPE)) {

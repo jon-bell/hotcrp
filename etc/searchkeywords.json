@@ -164,6 +164,11 @@
         "negated": false, "sorting": false, "is_hash": false, "has": "any"
     },
     {
+        "name": "sclass",
+        "parse_function": "Sclass_SearchTerm::parse", "has": "any"
+    },
+    {   "name": "subclass", "alias": "sclass"   },
+    {
         "name": "hashtag",
         "parse_function": "Tag_SearchTerm::parse",
         "negated": false, "sorting": false, "is_hash": true, "has": "any"
@@ -218,7 +223,7 @@
     {
         "name": "r",
         "parse_function": "Review_SearchTerm::parse",
-        "retype": null, "recompleteness": null, "reblank": true, "has": ">0"
+        "reblank": true, "has": ">0"
     },
     {
         "name": "token",
@@ -272,31 +277,38 @@
         "match": "[-_.a-zA-Z0-9\\s\\x80-\\xFF]+", "priority": -1,
         "expand_function": "Option_SearchTerm::parse_factory"
     },
+
     {
         "name": "show",
-        "parse_function": "Show_SearchTerm::parse", "allow_parens": true
+        "parse_function": "Show_SearchTerm::parse", "allow_parens": true,
+        "priority": 100
     },
     {
         "name": "hide",
-        "parse_function": "Show_SearchTerm::parse", "allow_parens": true
+        "parse_function": "Show_SearchTerm::parse", "allow_parens": true,
+        "priority": 100
     },
     {
         "name": "edit",
-        "parse_function": "Show_SearchTerm::parse", "allow_parens": true
+        "parse_function": "Show_SearchTerm::parse", "allow_parens": true,
+        "priority": 100
     },
     {
         "name": "showsort",
-        "parse_function": "Show_SearchTerm::parse", "allow_parens": true
+        "parse_function": "Show_SearchTerm::parse", "allow_parens": true,
+        "priority": 100
     },
     {   "name": "sortshow", "alias": "showsort"   },
     {
         "name": "editsort",
-        "parse_function": "Show_SearchTerm::parse", "allow_parens": true
+        "parse_function": "Show_SearchTerm::parse", "allow_parens": true,
+        "priority": 100
     },
     {   "name": "sortedit", "alias": "editsort"   },
     {
         "name": "sort",
-        "parse_function": "Show_SearchTerm::parse", "allow_parens": true
+        "parse_function": "Show_SearchTerm::parse", "allow_parens": true,
+        "priority": 100
     },
     {
         "name": "LEGEND",
@@ -312,6 +324,12 @@
     {   "name": "search", "alias": "ss"   },
     {
         "name": "has",
-        "parse_function": "PaperSearch::parse_has"
+        "parse_function": "PaperSearch::parse_has",
+        "priority": 100
+    },
+    {
+        "name": "searchoption",
+        "parse_function": "PaperSearch::parse_searchoption",
+        "priority": 100
     }
 ]

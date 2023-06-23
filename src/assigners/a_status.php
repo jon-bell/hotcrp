@@ -1,6 +1,6 @@
 <?php
 // a_status.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Status_Assignable extends Assignable {
     /** @var ?int */
@@ -224,7 +224,7 @@ class Status_Assigner extends Assigner {
         // email reviewers
         foreach ($prow->reviewers_as_display() as $minic) {
             if (!in_array($minic->contactId, $sent)
-                && $minic->following_reviews($prow)
+                && $minic->following_reviews($prow, CommentInfo::CT_TOPIC_PAPER)
                 && ($p = HotCRPMailer::prepare_to($minic, "@withdrawreviewer", $rest))) {
                 if (!$minic->can_view_review_identity($prow, null)) {
                     $p->unique_preparation = true;
@@ -235,7 +235,8 @@ class Status_Assigner extends Assigner {
         }
 
         // if after submission deadline, email administrators
-        if (!$aset->conf->time_finalize_paper($prow)) {
+        if ($this->item->pre("_submitted") > 0
+            && !$prow->submission_round()->time_submit(true)) {
             foreach ($prow->late_withdrawal_followers() as $minic) {
                 if (!in_array($minic->contactId, $sent)
                     && ($p = HotCRPMailer::prepare_to($minic, $tmpl, $rest))) {

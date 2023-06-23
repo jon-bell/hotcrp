@@ -1,6 +1,6 @@
 <?php
 // mailer.php -- HotCRP mail template manager
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Mailer {
     const CONTEXT_BODY = 0;
@@ -43,6 +43,8 @@ class Mailer {
     protected $preparation;
     /** @var int */
     protected $context = 0;
+    /** @var ?string */
+    protected $line_prefix;
 
     /** @var array<string,true> */
     private $_unexpanded = [];
@@ -54,6 +56,7 @@ class Mailer {
     function __construct(Conf $conf, $recipient = null, $settings = []) {
         $this->conf = $conf;
         $this->eol = $conf->opt("postfixEOL") ?? "\r\n";
+        $this->flowed = !!$this->conf->opt("mailFormatFlowed");
         $this->reset($recipient, $settings);
     }
 
@@ -64,7 +67,6 @@ class Mailer {
         if ($this->width <= 0) {
             $this->width = 10000000;
         }
-        $this->flowed = !!$this->conf->opt("mailFormatFlowed");
         $this->censor = $settings["censor"] ?? self::CENSOR_NONE;
         $this->reason = $settings["reason"] ?? null;
         $this->change_message = $settings["change"] ?? null;
@@ -253,7 +255,7 @@ class Mailer {
             $loginparts = "email=" . urlencode($this->recipient->email);
         }
         if ($uf->name === "LOGINURL") {
-            return $this->conf->opt("paperSite") . "/signin" . ($loginparts ? "/?" . $loginparts : "/");
+            return $this->conf->opt("paperSite") . "/signin/" . ($loginparts ? "?{$loginparts}" : "");
         } else if ($uf->name === "LOGINURLPARTS") {
             return $loginparts;
         } else {
@@ -262,11 +264,12 @@ class Mailer {
     }
 
     function kw_needpassword($args, $isbool, $uf) {
-        $external_login = $this->conf->external_login();
-        if (!$this->recipient) {
-            return $external_login ? false : null;
+        if ($this->conf->external_login() || $this->censor) {
+            return false;
+        } else if ($this->recipient) {
+            return $this->recipient->password_unset();
         } else {
-            return !$external_login && $this->recipient->password_unset();
+            return null;
         }
     }
 
@@ -277,8 +280,7 @@ class Mailer {
             return null;
         }
         $this->sensitive = true;
-        $token = $this->censor ? "HIDDEN" : $this->preparation->reset_capability;
-        if (!$token) {
+        if (!$this->censor && !$this->preparation->reset_capability) {
             $capinfo = new TokenInfo($this->conf, TokenInfo::RESETPASSWORD);
             if (($cdbu = $this->recipient->cdb_user())) {
                 $capinfo->set_user($cdbu)->set_token_pattern("hcpw1[20]");
@@ -289,6 +291,7 @@ class Mailer {
             $token = $capinfo->create();
             $this->preparation->reset_capability = $token;
         }
+        $token = $this->censor ? "HIDDEN" : $this->preparation->reset_capability;
         return $this->conf->hoturl_raw("resetpassword", null, Conf::HOTURL_ABSOLUTE | Conf::HOTURL_NO_DEFAULTS) . "/" . urlencode($token);
     }
 
@@ -313,9 +316,9 @@ class Mailer {
             foreach (is_array($xchecks) ? $xchecks : [$xchecks] as $xf) {
                 if (is_string($xf)) {
                     if ($xf[0] === "*") {
-                        $ok = $ok && call_user_func([$this, substr($xf, 1)], $uf);
+                        $ok = $ok && call_user_func([$this, substr($xf, 1)], $uf, $name);
                     } else {
-                        $ok = $ok && call_user_func($xf, $this, $uf);
+                        $ok = $ok && call_user_func($xf, $this, $uf, $name);
                     }
                 } else {
                     $ok = $ok && !!$xf;
@@ -425,7 +428,7 @@ class Mailer {
         return $text . $rest;
     }
 
-    private function _lineexpand($info, $line, $indent) {
+    private function _lineexpand($line, $indent) {
         $text = "";
         while (preg_match('/^(.*?)(%(#?[-a-zA-Z0-9!@_:.\/]+(?:|\([^\)]*\)))%)(.*)$/s', $line, $m)) {
             if (($s = $this->expandvar($m[3], false)) !== null) {
@@ -436,7 +439,8 @@ class Mailer {
             $line = $m[4];
         }
         $text .= $line;
-        return prefix_word_wrap($info, $text, $indent, $this->width, $this->flowed);
+        return prefix_word_wrap($this->line_prefix ?? "", $text, $indent,
+                                $this->width, $this->flowed);
     }
 
     /** @param string $text
@@ -451,6 +455,7 @@ class Mailer {
         // width, expansion type based on field
         $old_context = $this->context;
         $old_width = $this->width;
+        $old_line_prefix = $this->line_prefix;
         if (isset(self::$email_fields[$field])) {
             $this->context = self::CONTEXT_EMAIL;
             $this->width = 10000000;
@@ -491,18 +496,20 @@ class Mailer {
                 if (($line[0] === " " || $line[0] === "\t" || $line[0] === "*")
                     && preg_match('/\A([ \t]*\*[ \t]+|[ \t]*.*?: (?=%))(.*?: |)(%(\w+(?:|\([^\)]*\)))%)\s*\z/s', $line, $m)
                     && ($tl = tab_width($m[1], true)) <= 20) {
+                    $this->line_prefix = $m[1] . $m[2];
                     if (str_starts_with($m[4] ?? "", "OPT(")) {
                         if (($yes = $this->expandvar($m[4], true))) {
-                            $text .= prefix_word_wrap($m[1] . $m[2], $this->expandvar($m[4], false), $tl, $this->width, $this->flowed);
+                            $text .= prefix_word_wrap($this->line_prefix, $this->expandvar($m[4], false), $tl, $this->width, $this->flowed);
                         } else if ($yes === null) {
                             $text .= $line . "\n";
                         }
                     } else {
-                        $text .= $this->_lineexpand($m[1] . $m[2], $m[3], $tl);
+                        $text .= $this->_lineexpand($m[3], $tl);
                     }
                     continue;
                 }
-                $text .= $this->_lineexpand("", $line, 0);
+                $this->line_prefix = "";
+                $text .= $this->_lineexpand($line, 0);
             }
         }
 
@@ -513,6 +520,7 @@ class Mailer {
 
         $this->context = $old_context;
         $this->width = $old_width;
+        $this->line_prefix = $old_line_prefix;
         return $text;
     }
 
@@ -596,9 +604,9 @@ class Mailer {
                     $mimetext->mi->field = $lcfield;
                     $mimetext->mi->landmark = "{$field} field";
                     $prep->errors[] = $mimetext->mi;
-                    $logmsg = "$lcfield: $text";
+                    $logmsg = "{$lcfield}: {$text}";
                     if (!in_array($logmsg, $this->_errors_reported)) {
-                        error_log("mailer error on $logmsg");
+                        error_log("mailer error on {$logmsg}");
                         $this->_errors_reported[] = $logmsg;
                     }
                 }
@@ -615,16 +623,23 @@ class Mailer {
 
     /** @param list<MailPreparation> $preps */
     static function send_combined_preparations($preps) {
-        $last_p = null;
-        foreach ($preps as $p) {
-            if ($last_p && $last_p->can_merge($p)) {
-                $last_p->merge($p);
-            } else {
-                $last_p && $last_p->send();
-                $last_p = $p;
+        $n = count($preps);
+        for ($i = 0; $i !== $n; ++$i) {
+            $p = $preps[$i];
+            if (!$p) {
+                continue;
             }
+            if (!$p->unique_preparation) {
+                for ($j = $i + 1; $j !== $n; ++$j) {
+                    if ($preps[$j]
+                        && $p->can_merge($preps[$j])) {
+                        $p->merge($preps[$j]);
+                        $preps[$j] = null;
+                    }
+                }
+            }
+            $p->send();
         }
-        $last_p && $last_p->send();
     }
 
 
@@ -647,18 +662,31 @@ class Mailer {
     }
 
     /** @param string $ref */
-    function unexpanded_warning_at($ref) {
-        $xref = str_starts_with($ref, "%") ? $ref : "%{$ref}%";
-        if (preg_match('/\A(?:RESET|)PASSWORDLINK/', $ref)) {
-            if ($this->conf->external_login()) {
-                $this->warning_at($xref, "<0>This site does not use password links");
-            } else if ($this->censor === self::CENSOR_ALL) {
-                $this->warning_at($xref, "<0>Password links cannot appear in mails with Cc or Bcc");
-            } else {
-                $this->warning_at($xref, "<0>Keyword not found");
-            }
+    final function unexpanded_warning_at($ref) {
+        if (preg_match('/\A%(\w+)/', $ref, $m)) {
+            $kw = $m[1];
+            $xref = $ref;
         } else {
-            $this->warning_at($xref, "<0>Keyword not found");
+            $kw = $ref;
+            $xref = "%{$kw}%";
         }
+        $text = $this->handle_unexpanded_keyword($kw, $xref);
+        if ($text !== "") {
+            $this->warning_at($xref, $text);
+        }
+    }
+
+    /** @param string $kw
+     * @param string $xref
+     * @return string */
+    function handle_unexpanded_keyword($kw, $xref) {
+        if (preg_match('/\A(?:RESET|)PASSWORDLINK/', $kw)) {
+            if ($this->conf->external_login()) {
+                return "<0>This site does not use password links";
+            } else if ($this->censor === self::CENSOR_ALL) {
+                return "<0>Password links cannot appear in mails with Cc or Bcc";
+            }
+        }
+        return "<0>Keyword not found";
     }
 }

@@ -1,6 +1,6 @@
 <?php
 // search/st_paperstatus.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class PaperStatus_SearchTerm extends SearchTerm {
     private $match;
@@ -18,7 +18,7 @@ class PaperStatus_SearchTerm extends SearchTerm {
         if ($fval[0] === "outcome") {
             return new Decision_SearchTerm($srch->user, $fval[1]);
         } else {
-            if ($srch->limit_submitted()
+            if ($srch->limit_term()->is_submitted()
                 && ($fval[0] !== "timeSubmitted" || $fval[1] !== ">0")) {
                 $srch->lwarning($sword, "<0>Matches nothing because this search is limited to completed submissions");
             }

@@ -1,6 +1,6 @@
 <?php
 // reviewcsv.php -- HotCRP review export script
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
     require_once(dirname(__DIR__) . "/src/init.php");
@@ -37,7 +37,7 @@ class ReviewCSV_Batch {
     /** @var ?int */
     public $format;
     /** @var ?int */
-    public $version;
+    public $before;
     /** @var list<bool> */
     public $rfseen;
     /** @var list<string> */
@@ -77,11 +77,11 @@ class ReviewCSV_Batch {
         if (!in_array($this->t, PaperSearch::viewable_limits($this->user, $this->t))) {
             throw new CommandLineException("No search collection ‘{$this->t}’");
         }
-        if (isset($arg["version"])) {
-            if (($t = $this->conf->parse_time($arg["version"])) !== false) {
-                $this->version = $t;
+        if (isset($arg["before"])) {
+            if (($t = $this->conf->parse_time($arg["before"])) !== false) {
+                $this->before = $t;
             } else {
-                throw new CommandLineException("‘--version’ requires a date");
+                throw new CommandLineException("‘--before’ requires a date");
             }
         }
     }
@@ -108,7 +108,7 @@ class ReviewCSV_Batch {
             $this->header[] = "sitename";
             $this->header[] = "siteclass";
         }
-        array_push($this->header, "pid", "review", "email", "round", "submitted_at");
+        array_push($this->header, "pid", "review", "email", "round", "submitted_at", "vtag");
         if ($this->all_status || $this->comments) {
             $this->header[] = "status";
         }
@@ -145,6 +145,7 @@ class ReviewCSV_Batch {
         $x["email"] = "";
         $x["round"] = "";
         $x["submitted_at"] = $prow->timeSubmitted > 0 ? $prow->timeSubmitted : "";
+        $x["vtag"] = $prow->timeModified;
         if ($prow->timeSubmitted > 0) {
             $rs = "submitted";
         } else if ($prow->timeWithdrawn > 0) {
@@ -157,7 +158,7 @@ class ReviewCSV_Batch {
             if (($o->type === "title"
                  || $o->type === "abstract"
                  || $o->type === "text")
-                && $o->can_render($this->fr->context)
+                && $o->on_render_context($this->fr->context)
                 && ($v = $prow->option($o))) {
                 $o->render($this->fr, $v);
                 $x["field"] = $o->title();
@@ -177,14 +178,15 @@ class ReviewCSV_Batch {
             $x["round"] = $rrd->unnamed ? "" : $rrd->name;
         }
         $rs = $crow->commentType & CommentInfo::CT_DRAFT ? "draft " : "";
-        if ($crow->commentType & CommentInfo::CT_RESPONSE) {
+        if (($crow->commentType & CommentInfo::CT_RESPONSE) !== 0) {
             $rs .= "response";
-        } else if ($crow->commentType & CommentInfo::CT_BYAUTHOR) {
+        } else if (($crow->commentType & CommentInfo::CT_BYAUTHOR_MASK) !== 0) {
             $rs .= "author comment";
         } else {
             $rs .= "comment";
         }
         $x["submitted_at"] = $crow->timeDisplayed ? : ($crow->timeNotified ? : $crow->timeModified);
+        $x["vtag"] = $crow->timeModified;
         $x["status"] = $rs;
         $x["field"] = "comment";
         $x["format"] = $crow->commentFormat ?? $prow->conf->default_format;
@@ -196,17 +198,17 @@ class ReviewCSV_Batch {
      * @param ReviewInfo $rrow */
     function add_review($prow, $rrow, $x) {
         $x["review"] = $rrow->unparse_ordinal_id();
-        $x["email"] = $rrow->email;
+        $x["email"] = $rrow->reviewer()->email;
         $x["round"] = $prow->conf->round_name($rrow->reviewRound);
         $x["submitted_at"] = $rrow->reviewSubmitted;
+        $x["vtag"] = $rrow->reviewTime;
         $x["status"] = $rrow->status_description();
         $x["format"] = $prow->conf->default_format;
         foreach ($rrow->viewable_fields($this->user) as $f) {
-            if (($this->no_score && $f instanceof Score_ReviewField)
-                || ($this->no_text && $f instanceof Text_ReviewField)) {
+            if ($f instanceof Text_ReviewField ? $this->no_text : $this->no_score) {
                 continue;
             }
-            $fv = $f->value_unparse($rrow->fields[$f->order], ReviewField::VALUE_TRIM);
+            $fv = rtrim($f->unparse_value($rrow->fval($f)));
             if ($fv === "") {
                 // ignore
             } else if ($this->narrow) {
@@ -251,7 +253,7 @@ class ReviewCSV_Batch {
 
         $pset = $this->conf->paper_set(["paperId" => $search->paper_ids()]);
         foreach ($search->sorted_paper_ids() as $pid) {
-            $prow = $pset[$pid];
+            $prow = $pset->get($pid);
             $prow->ensure_full_reviews();
             $prow->ensure_reviewer_names();
             $px = [
@@ -269,8 +271,8 @@ class ReviewCSV_Batch {
                         $this->add_comment($prow, $xrow, $px);
                     }
                 } else if ($xrow instanceof ReviewInfo) {
-                    if ($this->version !== null) {
-                        $xrow = $xrow->version_at($this->version);
+                    if ($this->before !== null) {
+                        $xrow = $xrow->version_at($this->before);
                     }
                     if ($this->reviews
                         && $xrow !== null
@@ -286,44 +288,26 @@ class ReviewCSV_Batch {
     /** @return int */
     static function run_args($argv) {
         $arg = (new Getopt)->long(
-            "name:,n:",
-            "config:",
-            "help,h",
-            "type:,t:",
-            "narrow,x",
-            "wide,w",
-            "all,a",
-            "reviews,r",
-            "comments,c",
-            "fields,f",
-            "sitename,N",
-            "version:,time:",
-            "no-header",
-            "no-text",
-            "no-score",
-            "format:"
-        )->parse($argv);
-
-        if (isset($arg["help"])) {
-            fwrite(STDOUT, "Usage: php batch/reviewcsv.php [-n CONFID] [-t COLLECTION] [-acx] [QUERY...]
-Output a CSV file containing all reviews for the papers matching QUERY.
-
-Options include:
-  -t, --type COLLECTION  Search COLLECTION “s” (submitted) or “all” [s].
-  -x, --narrow           Narrow output.
-  -a, --all              Include all reviews, not just submitted reviews.
-  -r, --reviews          Include reviews (default unless -c or -f).
-  -c, --comments         Include comments.
-  -f, --fields           Include paper fields.
-  -N, --sitename         Include site name and class in CSV.
-  --version TIME         Return reviews as of time TIME.
-  --no-text              Omit text fields.
-  --no-score             Omit score fields.
-  --no-header            Omit CSV header.
-  --format=FMT           Only output text fields with format FMT.
-  QUERY...               A search term.\n");
-            return 0;
-        }
+            "name:,n: !",
+            "config: !",
+            "help,h !",
+            "type:,t: =COLLECTION Search COLLECTION “s” (submitted) or “all” [s]",
+            "narrow,x Narrow output",
+            "wide,w !",
+            "all,a Include all reviews, not just submitted ones",
+            "reviews,r Include reviews (default unless -c or -f)",
+            "comments,c Include comments",
+            "fields,f Include paper fields",
+            "sitename,N Include site name and class in CSV",
+            "before: =TIME Return reviews as of TIME",
+            "no-text Omit text fields",
+            "no-score Omit score fields",
+            "no-header Omit CSV header",
+            "format: =FMT Only output text fields with format FMT"
+        )->description("Output CSV containing all reviews for papers matching QUERY.
+Usage: php batch/reviewcsv.php [-acx] [QUERY...]")
+         ->helpopt("help")
+         ->parse($argv);
 
         $conf = initialize_conf($arg["config"] ?? null, $arg["name"] ?? null);
         $fcsv = new ReviewCSV_Batch($conf);

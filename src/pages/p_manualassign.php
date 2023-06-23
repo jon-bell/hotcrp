@@ -30,7 +30,7 @@ class ManualAssign_Page {
             }
         }
 
-        $confset = $this->conf->conflict_types();
+        $confset = $this->conf->conflict_set();
         $assignments = [];
         foreach ($this->viewer->paper_set(["paperId" => $pids, "reviewSignatures" => true]) as $row) {
             $name = "assrev{$row->paperId}u{$rcid}";
@@ -171,15 +171,15 @@ class ManualAssign_Page {
             $search->set_field_highlighter_query(join(" OR ", $hlsearch));
         }
         $pl = new PaperList("reviewAssignment", $search, ["sort" => true], $this->qreq);
-        $pl->apply_view_session();
-        $pl->apply_view_qreq();
+        $pl->apply_view_session($this->qreq);
+        $pl->apply_view_qreq($this->qreq);
         echo Ht::form($this->conf->hoturl("=manualassign", ["reviewer" => $reviewer->email, "sort" => $this->qreq->sort]), ["class" => "assignpc ignore-diff"]),
             Ht::hidden("t", $this->qreq->t),
             Ht::hidden("q", $this->qreq->q);
         $rev_rounds = $this->conf->round_selector_options(false);
         $expected_round = $this->conf->assignment_round_option(false);
 
-        echo '<div id="searchform" class="mb-3 has-fold fold10', $pl->viewing("authors") ? "o" : "c", '">';
+        echo '<div class="tlcontainer mb-3 has-fold fold10', $pl->viewing("authors") ? "o" : "c", '">';
         if (count($rev_rounds) > 1) {
             echo '<div class="entryi"><label for="assrevround">Review round</label><div class="entry">',
                 Ht::select("rev_round", $rev_rounds, $this->qreq->rev_round ? : $expected_round, ["id" => "assrevround", "class" => "ignore-diff"]), ' <span class="barsep">·</span> ';
@@ -202,8 +202,8 @@ class ManualAssign_Page {
             Ht::submit("update", "Save assignments", ["class" => "btn-primary big"]), '</div></div>';
         echo '</div>';
 
-        $pl->set_table_id_class("foldpl", "pltable-fullw remargin-left remargin-right");
-        $pl->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_LIST);
+        $pl->set_table_id_class("foldpl", null);
+        $pl->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_LIST | PaperList::DECOR_FULLWIDTH);
         echo '<div class="pltable-fullw-container demargin">';
         $pl->print_table_html();
         echo '</div>';
@@ -217,7 +217,7 @@ class ManualAssign_Page {
 
 
     function print(Contact $reviewer = null) {
-        $this->qreq->print_header("Assignments", "assignpc", ["subtitle" => "Manual"]);
+        $this->qreq->print_header("Assignments", "manualassign", ["subtitle" => "Manual"]);
         echo '<nav class="papmodes mb-5 clearfix"><ul>',
             '<li class="papmode"><a href="', $this->conf->hoturl("autoassign"), '">Automatic</a></li>',
             '<li class="papmode active"><a href="', $this->conf->hoturl("manualassign"), '">Manual</a></li>',
@@ -280,7 +280,7 @@ class ManualAssign_Page {
             Ht::entry("q", $this->qreq->q, [
                 "id" => "manualassignq", "size" => 40, "placeholder" => "(All)",
                 "class" => "papersearch want-focus need-suggest", "aria-label" => "Search",
-                "spellcheck" => false
+                "spellcheck" => false, "autocomplete" => "off"
             ]), " &nbsp;in &nbsp;",
             PaperSearch::limit_selector($this->conf, $this->limits, $this->qreq->t),
             "</td></tr>\n",

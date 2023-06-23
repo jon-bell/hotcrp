@@ -1,6 +1,6 @@
 <?php
 // pages/p_settings.php -- HotCRP chair-only conference settings management page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Settings_Page {
     /** @var Conf */
@@ -70,10 +70,10 @@ class Settings_Page {
     function handle_update($qreq) {
         if ($this->sv->execute()) {
             $qreq->set_csession("settings_highlight", $this->sv->message_field_map());
-            if (!empty($this->sv->updated_fields())) {
+            if (!empty($this->sv->changed_keys())) {
                 $this->conf->success_msg("<0>Changes saved");
             } else {
-                $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::MARKED_NOTE));
+                $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
             }
             $this->sv->report();
             $this->conf->redirect_self($qreq);
@@ -88,8 +88,8 @@ class Settings_Page {
         }
 
         $qreq->print_header("Settings", "settings", [
+            "title_div" => "",
             "subtitle" => $this->sv->group_title($group),
-            "title_div" => '<hr class="c">',
             "body_class" => "leftmenu",
             "save_messages" => true
         ]);
@@ -98,10 +98,10 @@ class Settings_Page {
             $this->conf->make_script_file("scripts/settings.js"), "\n",
 
             Ht::form($this->conf->hoturl("=settings", "group={$group}"),
-                     ["id" => "settingsform", "class" => "need-unload-protection"]),
+                     ["id" => "f-settings", "class" => "need-unload-protection"]),
 
             '<div class="leftmenu-left"><nav class="leftmenu-menu">',
-            '<h1 class="leftmenu"><a href="" class="uic js-leftmenu q">Settings</a></h1>',
+            '<h1 class="leftmenu"><button type="button" class="q uic js-leftmenu">Settings</button></h1>',
             '<ul class="leftmenu-list">';
         foreach ($this->sv->group_members("") as $gj) {
             $title = $gj->short_title ?? $gj->title;
@@ -124,7 +124,7 @@ class Settings_Page {
         }
 
         echo "</main></form>\n";
-        Ht::stash_script('hiliter_children("#settingsform")');
+        Ht::stash_script('hiliter_children("#f-settings")');
         $qreq->print_footer();
     }
 
@@ -176,10 +176,10 @@ class Settings_Page {
 
         $sv = SettingValues::make_request($user, $qreq);
         $sv->set_use_req(isset($qreq->update) && $qreq->valid_post());
-        $sv->session_highlight($qreq);
         if (!$sv->viewable_by_user()) {
             $user->escape();
         }
+        $sv->session_highlight($qreq);
 
         $sp = new Settings_Page($sv, $user);
         $group = $qreq->group = $sp->choose_setting_group($qreq);

@@ -9,7 +9,7 @@ class GetAbstracts_ListAction extends ListAction {
      * @param Contact $user
      * @param PaperOption $o */
     private static function render_abstract($fr, $prow, $user, $o) {
-        $fr->value = $prow->abstract_text();
+        $fr->value = $prow->abstract();
         $fr->value_format = $prow->abstract_format();
     }
     /** @param FieldRender $fr
@@ -47,7 +47,7 @@ class GetAbstracts_ListAction extends ListAction {
         $fr = new FieldRender(FieldRender::CTEXT, $user);
         foreach ($user->conf->options()->page_fields($prow) as $o) {
             if (($o->id <= 0 || $user->allow_view_option($prow, $o))
-                && $o->page_order() !== false) {
+                && $o->on_page()) {
                 $fr->clear();
                 if ($o->id === -1004) {
                     self::render_abstract($fr, $prow, $user, $o);
@@ -79,7 +79,7 @@ class GetAbstracts_ListAction extends ListAction {
         $ml = [];
         foreach ($ssel->paper_set($user, ["topics" => 1]) as $prow) {
             if (($whyNot = $user->perm_view_paper($prow))) {
-                $ml[] = MessageItem::error("<5>" . $whyNot->unparse_html());
+                array_push($ml, ...$whyNot->message_list(null, 2));
             } else {
                 $texts[] = $this->render($prow, $user);
                 $lastpid = $prow->paperId;

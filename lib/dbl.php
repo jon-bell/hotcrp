@@ -1,6 +1,6 @@
 <?php
 // dbl.php -- database interface layer
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Dbl_Result {
     /** @var int */
@@ -32,6 +32,10 @@ class Dbl_Result {
         $r->insert_id = null;
         $r->errno = 0;
         return $r;
+    }
+    /** @return bool */
+    function is_error() {
+        return $this->errno !== 0;
     }
     /** @return list<array<int,?string>> */
     function fetch_all() {
@@ -529,6 +533,9 @@ class Dbl {
         return $result;
     }
 
+    // NB The following functions are intentionally misdeclared to return
+    // `Dbl_Result`. The true return type is `Dbl_Result|\mysqli_result`.
+
     /** @return Dbl_Result */
     static private function do_query_with($dblink, $qstr, $argv, $flags) {
         if (!($flags & self::F_RAW)) {
@@ -755,7 +762,7 @@ class Dbl {
      * @return bool */
     static function is_error($result) {
         return !$result
-            || ($result instanceof Dbl_Result && $result->errno);
+            || ($result instanceof Dbl_Result && $result->errno !== 0);
     }
 
     static private function do_make_result($args, $flags = self::F_ERROR) {
@@ -991,4 +998,8 @@ function sql_in_int_list($set) {
     } else {
         return " in (" . join(", ", $set) . ")";
     }
+}
+
+if (function_exists("mysqli_report")) {
+    mysqli_report(MYSQLI_REPORT_OFF);
 }

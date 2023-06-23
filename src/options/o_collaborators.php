@@ -1,6 +1,6 @@
 <?php
 // o_collaborators.php -- HotCRP helper class for collaborators intrinsic
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Collaborators_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
@@ -12,7 +12,7 @@ class Collaborators_PaperOption extends PaperOption {
             $ov->set_value_data([1], [$collab]);
         }
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return $ov->value ? $ov->data() : null;
     }
     function value_check(PaperValue $ov, Contact $user) {
@@ -27,11 +27,11 @@ class Collaborators_PaperOption extends PaperOption {
         $ps->change_at($this);
         $collab = $ov->data();
         if ($collab === null || strlen($collab) < 8190) {
-            $ps->save_paperf("collaborators", $collab === "" ? null : $collab);
-            $ps->update_paperf_overflow("collaborators", null);
+            $ov->prow->set_prop("collaborators", $collab === "" ? null : $collab);
+            $ov->prow->set_overflow_prop("collaborators", null);
         } else {
-            $ps->save_paperf("collaborators", null);
-            $ps->update_paperf_overflow("collaborators", $collab);
+            $ov->prow->set_prop("collaborators", null);
+            $ov->prow->set_overflow_prop("collaborators", $collab);
         }
         return true;
     }

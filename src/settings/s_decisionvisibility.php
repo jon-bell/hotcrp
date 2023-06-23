@@ -1,6 +1,6 @@
 <?php
 // settings/s_decisionvisibility.php -- HotCRP settings > decisions page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class DecisionVisibility_SettingParser extends SettingParser {
     function set_oldv(Si $si, SettingValues $sv) {
@@ -36,6 +36,7 @@ class DecisionVisibility_SettingParser extends SettingParser {
 
 
     static function print_author(SettingValues $sv) {
+        echo '<p class="hidden feedback is-note mb-3 if-settings-decision-desk-reject">Decisions in the desk-reject category are always visible to authors and reviewers.</p>';
         $dva = '<div class="d-inline-flex flex-wrap">'
             . Ht::label("Yes, for submissions matching this search:", "decision_visibility_author_condition", ["class" => "mr-2 uic js-settings-radioitem-click"])
             . '<div>' . $sv->feedback_at("decision_visibility_author_condition")

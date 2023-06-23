@@ -1,6 +1,6 @@
 <?php
 // o_nonblind.php -- HotCRP helper class for blindness selection intrinsic
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Nonblind_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
@@ -12,12 +12,12 @@ class Nonblind_PaperOption extends PaperOption {
             $ov->set_value_data([1], [null]);
         }
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $ps) {
         return !!$ov->value;
     }
     function value_save(PaperValue $ov, PaperStatus $ps) {
         $ps->change_at($this);
-        $ps->save_paperf("blind", $ov->value ? 0 : 1);
+        $ov->prow->set_prop("blind", $ov->value ? 0 : 1);
         return true;
     }
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {

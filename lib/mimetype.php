@@ -85,6 +85,14 @@ class Mimetype {
         if (array_key_exists($type, self::$tmap)) {
             return self::$tmap[$type];
         }
+        $space = strpos($type, " ");
+        $semi = strpos($type, ";");
+        if ($space || $semi) {
+            $type = substr($type, 0, min($space ? : strlen($type), $semi ? : strlen($type)));
+            if (array_key_exists($type, self::$tmap)) {
+                return self::$tmap[$type];
+            }
+        }
         if (self::$mime_types === null) {
             self::$mime_types = true;
             $t = (string) @file_get_contents(SiteLoader::find("lib/mime.types"));
@@ -256,7 +264,8 @@ class Mimetype {
             // do not sniff
         } else if (substr($content, 0, 5) === "%PDF-") {
             return self::PDF_TYPE;
-        } else if (strlen($content) > 516 && substr($content, 512, 4) === "\x00\x6E\x1E\xF0") {
+        } else if (strlen($content) > 516
+                   && substr($content, 512, 4) === "\x00\x6E\x1E\xF0") {
             return self::PPT_TYPE;
         } else if (substr($content, 0, 4) === "\xFF\xD8\xFF\xD8"
                    || (substr($content, 0, 4) === "\xFF\xD8\xFF\xE0"

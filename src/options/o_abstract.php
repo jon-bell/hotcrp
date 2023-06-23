@@ -1,14 +1,14 @@
 <?php
 // o_abstract.php -- HotCRP helper class for abstract intrinsic
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Abstract_PaperOption extends PaperOption {
     function __construct($conf, $args) {
         parent::__construct($conf, $args);
-        $this->set_required(!$conf->opt("noAbstract"));
+        $this->set_required($conf->opt("noAbstract") ? self::REQ_NO : self::REQ_REGISTER);
     }
     function value_force(PaperValue $ov) {
-        if (($ab = $ov->prow->abstract_text()) !== "") {
+        if (($ab = $ov->prow->abstract()) !== "") {
             $ov->set_value_data([1], [$ab]);
         }
     }
@@ -17,18 +17,18 @@ class Abstract_PaperOption extends PaperOption {
             && (strlen($ov->data()) > 6
                 || !preg_match('/\A(?:|N\/?A|TB[AD])\z/i', $ov->data()));
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return (string) $ov->data();
     }
     function value_save(PaperValue $ov, PaperStatus $ps) {
         $ps->change_at($this);
         $ab = $ov->data();
         if ($ab === null || strlen($ab) < 16383) {
-            $ps->save_paperf("abstract", $ab === "" ? null : $ab);
-            $ps->update_paperf_overflow("abstract", null);
+            $ov->prow->set_prop("abstract", $ab === "" ? null : $ab);
+            $ov->prow->set_overflow_prop("abstract", null);
         } else {
-            $ps->save_paperf("abstract", null);
-            $ps->update_paperf_overflow("abstract", $ab);
+            $ov->prow->set_prop("abstract", null);
+            $ov->prow->set_overflow_prop("abstract", $ab);
         }
         return true;
     }
@@ -47,7 +47,7 @@ class Abstract_PaperOption extends PaperOption {
         if ($fr->for_page()) {
             $fr->table->render_abstract($fr, $this);
         } else {
-            $text = $ov->prow->abstract_text();
+            $text = $ov->prow->abstract();
             if ($text !== "") {
                 $fr->value = $text;
                 $fr->value_format = $ov->prow->abstract_format();
@@ -56,5 +56,8 @@ class Abstract_PaperOption extends PaperOption {
                 $fr->set_text("[No abstract]");
             }
         }
+    }
+    function present_script_expression() {
+        return ["type" => "text_present", "formid" => $this->formid];
     }
 }

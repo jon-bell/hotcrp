@@ -1,8 +1,14 @@
 <?php
 // pages/p_home.php -- HotCRP home page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Home_Page {
+    /** @var Conf
+     * @readonly */
+    public $conf;
+    /** @var Contact
+     * @readonly */
+    public $user;
     /** @var int */
     private $_nh2 = 0;
     /** @var bool */
@@ -19,6 +25,11 @@ class Home_Page {
     /** @var list<int|float> */
     private $_rf_means;
     private $_tokens_done;
+
+    function __construct(Contact $user) {
+        $this->conf = $user->conf;
+        $this->user = $user;
+    }
 
     static function disabled_request(Contact $user, Qrequest $qreq) {
         if (!$user->is_empty() && $user->is_disabled()) {
@@ -86,7 +97,7 @@ class Home_Page {
         $gx->push_print_cleanup("__footer");
         echo '<noscript><div class="msg msg-error"><strong>This site requires JavaScript.</strong> Your browser does not support JavaScript.<br><a href="https://github.com/kohler/hotcrp/">Report bad compatibility problems</a></div></noscript>', "\n";
         if ($user->privChair) {
-            echo '<div id="msg-clock-drift" class="homegrp hidden"></div>';
+            echo '<div id="p-clock-drift" class="homegrp hidden"></div>';
         }
     }
 
@@ -117,7 +128,8 @@ class Home_Page {
         echo '<li>', Ht::link("Settings", $user->conf->hoturl("settings")), '</li>';
     }
     static function print_admin_users(Contact $user) {
-        echo '<li>', Ht::link("Users", $user->conf->hoturl("users", "t=all")), '</li>';
+        $t = $user->privChair ? "all" : "re";
+        echo '<li>', Ht::link("Users", $user->conf->hoturl("users", ["t" => $t])), '</li>';
     }
     static function print_admin_assignments(Contact $user) {
         echo '<li>', Ht::link("Assignments", $user->conf->hoturl("autoassign")), '</li>';
@@ -162,18 +174,18 @@ class Home_Page {
         }
     }
 
-    function print_message(Contact $user) {
-        if (($t = $user->conf->_id("home", ""))) {
+    function print_message() {
+        if (($t = $this->conf->_i("home"))) {
             echo '<div class="msg ',
                 $this->_has_sidebar ? 'avoid-home-sidebar' : 'maxw-auto',
                 ' mb-5">', $t, '</div>';
         }
     }
 
-    function print_welcome(Contact $user) {
-        echo '<div class="homegrp">Welcome to the ', htmlspecialchars($user->conf->full_name()), " submissions site.";
-        if (($site = $user->conf->opt("conferenceSite"))
-            && $site !== $user->conf->opt("paperSite"))
+    function print_welcome() {
+        echo '<div class="homegrp">Welcome to the ', htmlspecialchars($this->conf->full_name()), " submissions site.";
+        if (($site = $this->conf->opt("conferenceSite"))
+            && $site !== $this->conf->opt("paperSite"))
             echo " For general conference information, see ", Ht::link(htmlspecialchars($site), htmlspecialchars($site)), ".";
         echo '</div>';
     }
@@ -185,34 +197,41 @@ class Home_Page {
     }
 
     function print_search(Contact $user, Qrequest $qreq, $gx) {
-        $conf = $user->conf;
         if (!$user->privChair
             && ($user->isPC
-                ? !$conf->setting("pc_seeall") && !$conf->has_any_submitted()
+                ? !$this->conf->setting("pc_seeall") && !$this->conf->has_any_submitted()
                 : !$user->is_reviewer())) {
             return;
         }
 
         $limits = PaperSearch::viewable_limits($user);
         echo '<div class="homegrp d-table" id="homelist">',
-            $this->print_h2_home('<a class="q" href="' . $conf->hoturl("search") . '" id="homesearch-label">Search</a>'),
-            Ht::form($conf->hoturl("search"), ["method" => "get", "class" => "form-basic-search"]),
+            $this->print_h2_home('<a class="q" href="' . $this->conf->hoturl("search") . '" id="homesearch-label">Search</a>'),
+            Ht::form($this->conf->hoturl("search"), ["method" => "get", "class" => "form-basic-search"]),
             Ht::entry("q", (string) $qreq->q, [
-                "id" => "homeq", "size" => 32, "title" => "Enter paper numbers or search terms",
-                "class" => "papersearch need-suggest flex-grow-1",
-                "placeholder" => "(All)", "spellcheck" => false,
-                "aria-labelledby" => "homesearch-label"
+                "id" => "homeq", "size" => 32,
+                "title" => "Enter paper numbers or search terms",
+                "class" => "papersearch need-suggest flex-grow-1 mb-1",
+                "placeholder" => "(All)",
+                "aria-labelledby" => "homesearch-label",
+                "spellcheck" => false, "autocomplete" => "off"
             ]), '<div class="form-basic-search-in"> in ',
-            PaperSearch::limit_selector($conf, $limits, $limits[0], ["class" => "ml-1"]),
-            Ht::submit("Search", ["class" => "ml-3"]),
+            PaperSearch::limit_selector($this->conf, $limits, $limits[0]),
+            Ht::submit("Search"),
             "</div></form></div>\n";
     }
 
-    /** @param Conf $conf
-     * @return list<Score_ReviewField> */
-    private function default_review_fields($conf) {
-        $this->_rfs = $this->_rfs ?? $conf->review_form()->highlighted_main_scores();
+    /** @return list<Score_ReviewField> */
+    private function default_review_fields() {
+        $this->_rfs = $this->_rfs ?? $this->conf->review_form()->highlighted_main_scores();
         return $this->_rfs;
+    }
+
+    /** @param string $setting
+     * @return ?string */
+    private function setting_time_span($setting) {
+        $t = $this->conf->setting($setting) ?? 0;
+        return $t > 0 ? $this->conf->unparse_time_with_local_span($t) : null;
     }
 
     function print_reviews(Contact $user, Qrequest $qreq, $gx) {
@@ -233,7 +252,7 @@ class Home_Page {
             $where[] = "reviewToken in (" . join(",", $tokens) . ")";
         }
         if (!empty($where)) {
-            $rfs = $this->default_review_fields($conf);
+            $rfs = $this->default_review_fields();
             $q = "select reviewType, reviewSubmitted, reviewNeedsSubmit, timeApprovalRequested, reviewRound";
             $missing_rounds = $scores = [];
             foreach ($rfs as $rf) {
@@ -267,7 +286,7 @@ class Home_Page {
         $npc = $sumpc_submit = $npc_submit = 0;
         $pc_rf_means = [];
         if ($user->isPC || $user->privChair) {
-            $rfs = $this->default_review_fields($conf);
+            $rfs = $this->default_review_fields();
             $q = "select count(reviewId) num_submitted";
             $scores = [];
             foreach ($rfs as $rf) {
@@ -298,9 +317,9 @@ class Home_Page {
         echo $this->print_h2_home("Reviews");
         if ($has_rinfo) {
             $score_texts = [];
-            foreach ($this->default_review_fields($conf) as $i => $rf) {
+            foreach ($this->default_review_fields() as $i => $rf) {
                 if ($this->_rf_means[$i] !== null) {
-                    $score_texts[] = $conf->_("average %1\$s score %2\$s", $rf->name_html, $rf->unparse_average($this->_rf_means[$i]), $this->_r_num_submitted);
+                    $score_texts[] = $conf->_("average %1\$s score %2\$s", $rf->name_html, $rf->unparse_computed($this->_rf_means[$i], "%.2f"), $this->_r_num_submitted);
                 }
             }
             echo $conf->_("You have submitted %1\$d of <a href=\"%3\$s\">%2\$d reviews</a> with %4\$#As.",
@@ -310,9 +329,9 @@ class Home_Page {
         }
         if (($user->isPC || $user->privChair) && $npc) {
             $score_texts = [];
-            foreach ($this->default_review_fields($conf) as $i => $rf) {
+            foreach ($this->default_review_fields() as $i => $rf) {
                 if ($pc_rf_means[$i] !== null) {
-                    $score_texts[] = $conf->_("average %1\$s score %2\$s", $rf->name_html, $rf->unparse_average($pc_rf_means[$i]), null);
+                    $score_texts[] = $conf->_("average %1\$s score %2\$s", $rf->name_html, $rf->unparse_computed($pc_rf_means[$i], "%.2f"), null);
                 }
             }
             echo $conf->_("The average PC member has submitted %1\$.1f reviews with %2\$#As.",
@@ -339,13 +358,12 @@ class Home_Page {
                     if ($conf->setting($dn) <= 0) {
                         $dn = $conf->review_deadline_name($round, $user->isPC, true);
                     }
-                    $d = $conf->unparse_setting_time_span($dn);
-                    if ($d != "N/A") {
-                        echo ' <em class="deadline">Please submit your ', $rname, ($this->_r_num_needs_submit == 1 ? "review" : "reviews"), " by $d.</em><br>\n";
+                    if (($d = $this->setting_time_span($dn))) {
+                        echo ' <em class="deadline">Please submit your ', $rname, ($this->_r_num_needs_submit == 1 ? "review" : "reviews"), " by {$d}.</em><br>\n";
                     }
                 } else if ($conf->time_review($round, $user->isPC, true)) {
                     $dn = $conf->review_deadline_name($round, $user->isPC, false);
-                    $d = $conf->unparse_setting_time_span($dn);
+                    $d = $this->setting_time_span($dn);
                     echo ' <em class="deadline"><strong class="overdue">', $rname, ($rname ? "reviews" : "Reviews"), ' are overdue.</strong> They were requested by ', $d, ".</em><br>\n";
                 } else {
                     echo ' <em class="deadline"><strong class="overdue">The <a href="', $conf->hoturl("deadlines"), '">deadline</a> for submitting ', $rname, "reviews has passed.</strong></em><br>\n";
@@ -353,9 +371,8 @@ class Home_Page {
             }
         } else if ($user->isPC && $user->can_review_any()) {
             $dn = $conf->review_deadline_name(null, $user->isPC, false);
-            $d = $conf->unparse_setting_time_span($dn);
-            if ($d != "N/A") {
-                echo " <em class=\"deadline\">The review deadline is $d.</em><br>\n";
+            if (($d = $this->setting_time_span($dn))) {
+                echo " <em class=\"deadline\">The review deadline is {$d}.</em><br>\n";
             }
         }
         if ($user->isPC && $user->can_review_any()) {
@@ -431,7 +448,7 @@ class Home_Page {
         }
 
         if ($user->is_reviewer()) {
-            echo "<div class=\"homesubgrp has-fold fold20c ui-unfold js-open-activity need-fold-storage\" id=\"homeactivity\" data-fold-storage=\"homeactivity\">",
+            echo "<div class=\"homesubgrp has-fold fold20c ui-fold js-open-activity need-fold-storage\" id=\"homeactivity\" data-fold-storage=\"homeactivity\">",
                 foldupbutton(20),
                 "<a href=\"\" class=\"q homeactivity ui js-foldup\" data-fold-target=\"20\">Recent activity<span class=\"fx20\">:</span></a>",
                 "</div>";
@@ -455,8 +472,8 @@ class Home_Page {
             $ttexts = array_map(function ($t) use ($user) {
                 return Ht::link($t, $user->conf->hoturl("paper", ["q" => "token:$t"]));
             }, $tokens);
-            echo '<a href="" class="ui js-review-tokens" data-review-tokens="',
-                join(" ", $tokens), '">Review tokens</a>',
+            echo '<button type="button" class="link ui js-review-tokens" data-review-tokens="',
+                join(" ", $tokens), '">Review tokens</button>',
                 (empty($tokens) ? "" : " (" . join(", ", $ttexts) . ")");
             if (!$this->_in_reviews) {
                 echo '</div>', "\n";
@@ -486,65 +503,117 @@ class Home_Page {
         echo '<a href="', $conf->hoturl("mail", "monreq=1"), '">Monitor requested reviews</a></div>', "\n";
     }
 
+    private function print_new_submission(Contact $user, SubmissionRound $sr) {
+        $conf = $user->conf;
+        $isreg = $sr->register >= Conf::$now && $sr->register < $sr->submit;
+        $dlt = $isreg ? $sr->register : $sr->submit;
+        if ($dlt > 0) {
+            $dltype = $isreg ? "Registration" : "Submission";
+            if (!$sr->unnamed) {
+                $dltype = strtolower($dltype);
+            }
+            $dlspan = $conf->unparse_time_with_local_span($dlt);
+            $dltx = "<em class=\"deadline\">{$sr->title1}{$dltype} deadline: {$dlspan}</em>";
+        } else {
+            $dltx = "";
+        }
+        if ($user->has_email()) {
+            $url = $conf->hoturl("paper", [
+                "p" => "new", "sclass" => $sr->unnamed ? null : $sr->tag
+            ]);
+            $actions = [[
+                "<a class=\"btn\" href=\"{$url}\">New {$sr->title1}submission</a>",
+                $sr->time_register(true) ? "" : "(admin only)"
+            ]];
+            if ($dltx !== "") {
+                $actions[] = [$dltx];
+            }
+            echo Ht::actions($actions, ["class" => "aab mt-0 mb-2 align-items-baseline"]);
+        } else if ($dltx !== "") {
+            echo '<p class="mb-2">', $dltx, '</p>';
+        }
+    }
+
+    private function submission_round_deadlines(&$deadlines, SubmissionRound $sr) {
+        if (!$sr->time_submit(true)) {
+            // Be careful not to refer to a future deadline; perhaps an admin
+            // just turned off submissions.
+            if (!$sr->submit || $sr->submit + $sr->grace > Conf::$now) {
+                $deadlines[] = "The site is not open for {$sr->title1}submissions at the moment.";
+            } else {
+                $deadlines[] = 'The <a href="' . $this->conf->hoturl("deadlines") . "\">{$sr->title1}submission deadline</a> has passed.";
+            }
+        } else if (!$sr->time_update(true)) {
+            $deadlines[] = 'The <a href="' . $this->conf->hoturl("deadlines") . "\">{$sr->title1}update deadline</a> has passed, but you can still submit.";
+            if ($sr->submit > Conf::$now) {
+                $d = $this->conf->unparse_time_with_local_span($sr->submit);
+                $deadlines[] = "You have until {$d} to submit {$sr->title1}papers.";
+            }
+        } else {
+            if ($sr->update > Conf::$now) {
+                $d = $this->conf->unparse_time_with_local_span($sr->update);
+                $deadlines[] = "You have until {$d} to submit {$sr->title1}papers.";
+            }
+        }
+    }
+
     function print_submissions(Contact $user, Qrequest $qreq, $gx) {
         $conf = $user->conf;
+        $srlist = [];
+        $any_open = false;
+        foreach ($conf->submission_round_list() as $sr) {
+            $any_open = $any_open || $sr->open > 0;
+            if ($user->privChair || $sr->time_register(true)) {
+                $srlist[] = $sr;
+            }
+        }
         if (!$user->is_author()
-            && $conf->time_start_paper() <= 0
             && !$user->privChair
-            && $user->is_reviewer()) {
+            && $user->is_reviewer()
+            && empty($srlist)) {
             return;
         }
 
         echo '<div class="homegrp" id="homeau">',
             $this->print_h2_home($user->is_author() ? "Your Submissions" : "Submissions");
 
-        $startable = $conf->time_start_paper();
-        if ($startable && !$user->has_email()) {
-            echo '<p><em class="deadline">', $conf->unparse_setting_deadline_span("sub_reg"), "</em><br>\n<small>You must sign in to start a submission.</small></p>";
-        } else if ($startable || $user->privChair) {
-            $url = $conf->hoturl("paper", "p=new");
-            $dl = $conf->unparse_setting_deadline_span("sub_reg");
-            echo Ht::actions([
-                ["<a class=\"btn\" href=\"{$url}\">New submission</a>", $startable ? "" : "(admin only)"],
-                ["<em class=\"deadline\">{$dl}</em>"]
-            ], ["class" => "aab mt-0 mb-0 align-items-baseline"]);
+        if (!empty($srlist)) {
+            if (!$user->has_email()) {
+                echo '<p>', Ht::link("Sign in", $conf->hoturl("signin")),
+                    ' to start submissions.</p>';
+            }
+            usort($srlist, "SubmissionRound::compare");
+            foreach ($srlist as $sr) {
+                $this->print_new_submission($user, $sr);
+            }
         }
 
         $plist = null;
         if ($user->is_author()) {
             $plist = new PaperList("authorHome", new PaperSearch($user, ["t" => "a"]));
             if (!$plist->is_empty()) {
-                echo '<hr class="g">';
                 $plist->set_table_decor(PaperList::DECOR_LIST);
                 $plist->print_table_html();
             }
         }
 
         $deadlines = [];
-        if ($plist && $plist->has("need_submit")) {
-            if (!$conf->time_finalize_paper(null)) {
-                // Be careful not to refer to a future deadline; perhaps an admin
-                // just turned off submissions.
-                if ($conf->time_between_settings("", "sub_sub", "sub_grace") > 0) {
-                    $deadlines[] = "The site is not open for submissions at the moment.";
-                } else {
-                    $deadlines[] = 'The <a href="' . $conf->hoturl("deadlines") . '">submission deadline</a> has passed.';
+        if ($plist && !$plist->is_empty()) {
+            $dlr = [];
+            foreach ($plist->rowset() as $prow) {
+                if ($prow->timeSubmitted > 0 || $prow->timeWithdrawn > 0) {
+                    continue;
                 }
-            } else if (!$conf->time_edit_paper(null)) {
-                $deadlines[] = 'The <a href="' . $conf->hoturl("deadlines") . '">update deadline</a> has passed, but you can still submit.';
-                $time = $conf->unparse_setting_time_span("sub_sub", " to submit papers");
-                if ($time != "N/A") {
-                    $deadlines[] = "You have until $time.";
+                $sr = $prow->submission_round();
+                if (isset($dlr[$sr->tag])) {
+                    continue;
                 }
-            } else {
-                $time = $conf->unparse_setting_time_span("sub_update", " to submit papers");
-                if ($time != "N/A") {
-                    $deadlines[] = "You have until $time.";
-                }
+                $dlr[$sr->tag] = true;
+                $this->submission_round_deadlines($deadlines, $sr);
             }
         }
-        if (!$startable && !count($deadlines)) {
-            if ($conf->time_after_setting("sub_open")) {
+        if (empty($srlist) && !count($deadlines)) {
+            if ($any_open) {
                 $deadlines[] = 'The <a href="' . $conf->hoturl("deadlines") . '">deadline</a> for registering submissions has passed.';
             } else {
                 $deadlines[] = "The site is not open for submissions at the moment.";
@@ -552,11 +621,11 @@ class Home_Page {
         }
         // NB only has("accepted") if author can see an accepted paper
         if ($plist && $plist->has("accepted")) {
-            $time = $conf->unparse_setting_time_span("final_soft");
+            $d = $this->setting_time_span("final_soft");
             if ($conf->time_after_setting("final_soft") && $plist->has("need_final")) {
-                $deadlines[] = "<strong class=\"overdue\">Final versions are overdue.</strong> They were requested by $time.";
-            } else if ($time != "N/A") {
-                $deadlines[] = "Submit final versions of your accepted papers by $time.";
+                $deadlines[] = "<strong class=\"overdue\">Final versions are overdue.</strong> They were requested by {$d}.";
+            } else if ($d) {
+                $deadlines[] = "Submit final versions of your accepted papers by {$d}.";
             }
         }
         if (!empty($deadlines)) {

@@ -207,7 +207,7 @@ class Track_SettingParser extends SettingParser {
             '<div class="entry">',
             Ht::select("{$pfx}/type", $permts, $reqtype, $sv->sjs("{$pfx}/type", ["class" => "uich js-foldup"])),
             " &nbsp;",
-            Ht::entry("{$pfx}/tag", $reqtag, $sv->sjs("{$pfx}/tag", ["class" => "fx need-suggest pc-tags"]));
+            Ht::entry("{$pfx}/tag", $reqtag, $sv->sjs("{$pfx}/tag", ["class" => "fx need-suggest pc-tags", "spellcheck" => false, "autocomplete" => "off"]));
         $sv->print_feedback_at($pfx);
         $sv->print_feedback_at("{$pfx}/type");
         $sv->print_feedback_at("{$pfx}/tag");
@@ -246,7 +246,7 @@ class Track_SettingParser extends SettingParser {
             echo "For submissions not on other tracks:";
         } else {
             echo $sv->label("track/{$ctr}/tag", "For submissions with tag", ["class" => "mr-2"]),
-                $sv->entry("track/{$ctr}/tag", ["class" => "settings-track-name need-suggest tags", "spellcheck" => false]),
+                $sv->entry("track/{$ctr}/tag", ["class" => "settings-track-name need-suggest tags", "spellcheck" => false, "autocomplete" => "off"]),
                 ':';
         }
         echo '</div>';
@@ -255,11 +255,11 @@ class Track_SettingParser extends SettingParser {
 
         if ($this->nfolded) {
             echo '<div class="entryi wide fn3">',
-                '<label><a href="" class="ui js-foldup q" data-fold-target="3">',
-                expander(true, 3), 'More…</a></label>',
-                '<div class="entry"><a href="" class="ui js-foldup q" data-fold-target="3">',
+                '<label><button type="button" class="q ui js-foldup" data-fold-target="3">',
+                expander(true, 3), 'More…</button></label>',
+                '<div class="entry"><button type="button" class="q ui js-foldup" data-fold-target="3">',
                 $sv->conf->_("(%d more permissions have default values)", $this->nfolded),
-                '</a></div></div>';
+                '</button></div></div>';
         }
         echo "</div></div>\n\n";
     }
@@ -335,7 +335,7 @@ class Track_SettingParser extends SettingParser {
             if (($t = $sv->tagger()->check($tag, Tagger::NOVALUE | Tagger::NOPRIVATE))) {
                 $pv = $type . $t;
             } else {
-                $sv->error_at($pfx, "<5>" . $sv->tagger()->error_html());
+                $sv->error_at($pfx, $sv->tagger()->error_ftext());
                 $sv->error_at("{$pfx}/tag");
                 return;
             }

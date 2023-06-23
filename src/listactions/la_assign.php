@@ -25,7 +25,7 @@ class Assign_ListAction extends ListAction {
             . '<span class="fx"> &nbsp;<span class="js-assign-for">for</span> &nbsp;'
             . Ht::select("markpc", [], 0, ["data-pcselector-selected" => $qreq->markpc])
             . "</span>" . $pl->action_submit("assign"),
-            ["linelink-class" => "has-fold foldc ui-unfold js-assign-list-action"]
+            ["linelink-class" => "has-fold foldc ui-fold js-assign-list-action"]
         ];
     }
     function run(Contact $user, Qrequest $qreq, SearchSelection $ssel) {
@@ -59,7 +59,8 @@ class Assign_ListAction extends ListAction {
         foreach ($ssel->selection() as $pid) {
             $text .= "$pid,$mt,$mpc\n";
         }
-        $assignset = new AssignmentSet($user, true);
+        $assignset = new AssignmentSet($user);
+        $assignset->override_conflicts();
         $assignset->enable_papers($ssel->selection());
         $assignset->parse($text);
         $assignset->execute(true);

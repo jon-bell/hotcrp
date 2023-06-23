@@ -1,22 +1,26 @@
 <?php
 // o_checkboxesbase.php -- HotCRP helper class for checkboxes & topics options
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 abstract class CheckboxesBase_PaperOption extends PaperOption {
     /** @var int */
     protected $min_count = 0;
     /** @var int */
     protected $max_count = 0;
+    /** @var bool */
+    protected $compact = false;
 
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
-        if (!isset($args->min) && $this->required) {
+        if (!isset($args->min) && $this->required > 0) {
             $this->min_count = 1;
         } else {
             $this->min_count = $args->min ?? 0;
         }
         $this->max_count = $args->max ?? 0;
-        $this->required = $this->min_count > 0;
+        if ($this->min_count > 0 && $this->required === 0) {
+            $this->set_required(self::REQ_SUBMIT);
+        }
     }
 
 
@@ -27,9 +31,6 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
      * @return array<int,int> */
     function interests($user) {
         return [];
-    }
-
-    function update_value_list(PaperValue $ov, PaperStatus $ps) {
     }
 
 
@@ -47,9 +48,9 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
         }
     }
 
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         $vs = $ov->value_list();
-        if (!empty($vs) && !$ps->export_ids()) {
+        if (!empty($vs) && !$pex->use_ids) {
             $tmap = $this->topic_set();
             $vs = array_map(function ($t) use ($tmap) { return $tmap[$t]; }, $vs);
         }
@@ -58,7 +59,7 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
 
     function value_store(PaperValue $ov, PaperStatus $ps) {
         if ($ov->has_anno("new_values") && count($ov->anno("new_values")) > 0) {
-            $this->update_value_list($ov, $ps);
+            $this->value_store_new_values($ov, $ps);
         }
 
         $vs = $ov->value_list();
@@ -67,8 +68,11 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
 
         $badvs = $ov->anno("bad_values") ?? [];
         if (!empty($badvs)) {
-            $ov->warning($ps->_("<0>Values %#s not found", $badvs, new FmtArg("id", $this->readable_formid())));
+            $ov->warning($ps->_("<0>Values {:list} not found", $badvs, new FmtArg("id", $this->readable_formid())));
         }
+    }
+
+    function value_store_new_values(PaperValue $ov, PaperStatus $ps) {
     }
 
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
@@ -140,10 +144,15 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
         $pt->print_editable_option_papt($this, null, [
             "id" => $this->readable_formid(),
+            "for" => false,
             "context_args" => [$this->min_count, $this->max_count]
         ]);
-        echo '<fieldset class="papev fieldset-covert" name="', $this->formid, '"><ul class="ctable">';
         $topicset = $this->topic_set();
+        echo '<fieldset class="papev fieldset-covert" name="', $this->formid,
+            '"><ul class="ctable',
+            $this->compact ? ' compact' : '',
+            count($topicset) < 7 ? ' column-count-1' : '',
+            '">';
         $readonly = !$this->test_editable($ov->prow);
         foreach ($topicset->group_list() as $tg) {
             $arg = ["class" => "uic js-range-click topic-entry", "id" => false,

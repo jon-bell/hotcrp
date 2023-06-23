@@ -31,9 +31,9 @@ class Fmt_Tester {
         xassert_eqq($ms->_("fart"), "fart example C");
         xassert_eqq($ms->_("fart", "bobby"), "fart example B");
         xassert_eqq($ms->_("fart", "bob"), "fart example A");
-        xassert_eqq($ms->_id("fox-saying", ""), "What the fox said");
-        xassert_eqq($ms->_id("fox-saying", "", new FmtArg("fox", "Animal")), "What the Animal said");
-        xassert_eqq($ms->_id("test103", "", "Ass"), "Ass %% %s %BU%%MAN%Ass");
+        xassert_eqq($ms->_i("fox-saying"), "What the fox said");
+        xassert_eqq($ms->_i("fox-saying", new FmtArg("fox", "Animal")), "What the Animal said");
+        xassert_eqq($ms->_i("test103", "Ass"), "Ass %% %s %BU%%MAN%Ass");
 
         $ms->add(["itext" => "butt", "otext" => "normal butt"]);
         $ms->add(["itext" => "butt", "otext" => "fat butt", "require" => ["$1[fat]"]]);
@@ -63,5 +63,48 @@ class Fmt_Tester {
         xassert_eqq($ms->_c("hello/yes/whatever", "Hello"), "Hello2");
         xassert_eqq($ms->_c("hello/ye", "Hello"), "Hello1");
         xassert_eqq($ms->_c("hello/yesp", "Hello"), "Hello1");
+    }
+
+    function test_braces() {
+        $ms = new Fmt;
+        $ms->add("Hello", "Bonjour");
+        $ms->add(["{} friend", "{} amis", ["$1 ≠ 1"]]);
+        $ms->add("{} friend", "{} ami");
+        xassert_eqq($ms->_("Hello"), "Bonjour");
+        xassert_eqq($ms->_("{} friend", 1), "1 ami");
+        xassert_eqq($ms->_("{} friend", 0), "0 amis");
+        xassert_eqq($ms->_("{} friend", 2), "2 amis");
+        xassert_eqq($ms->_("{0[foo]} friend", ["foo" => 3]), "3 friend");
+        xassert_eqq($ms->_("{0[foo]} friend", ["foo" => "&"]), "& friend");
+        xassert_eqq($ms->_("{:html} friend", "&"), "&amp; friend");
+        xassert_eqq($ms->_("{:url} friend", "&"), "%26 friend");
+        xassert_eqq($ms->_("{:list} friend", ["a", "b"]), "a and b friend");
+        xassert_eqq($ms->_("{0[foo]:html} friend", ["foo" => "&"]), "&amp; friend");
+        xassert_eqq($ms->_("{0[foo]:url} friend", ["foo" => "&"]), "%26 friend");
+        xassert_eqq($ms->_("{0[foo]:list} friend", ["foo" => ["a", "b"]]), "a and b friend");
+    }
+
+    function test_ftext() {
+        $ms = new Fmt;
+        xassert_eqq($ms->_("{:ftext}", "Ftext"), "Ftext");
+        xassert_eqq($ms->_("{:ftext}", "<0>Ftext"), "<0>Ftext");
+        xassert_eqq($ms->_("{:ftext}", "<5>Ftext"), "<5>Ftext");
+        xassert_eqq($ms->_("<{:ftext}", "Ftext"), "<Ftext");
+        xassert_eqq($ms->_("<{:ftext}", "<0>Ftext"), "<Ftext");
+        xassert_eqq($ms->_("<{:ftext}", "<5>Ftext"), "<Ftext");
+        xassert_eqq($ms->_("<0>{:ftext}", "Ftext&amp;"), "<0>Ftext&amp;");
+        xassert_eqq($ms->_("<0>{:ftext}", "<0>Ftext&amp;"), "<0>Ftext&amp;");
+        xassert_eqq($ms->_("<0>{:ftext}", "<5>Ftext&amp;"), "<0>Ftext&");
+        xassert_eqq($ms->_("<5>{:ftext}", "Ftext&amp;"), "<5>Ftext&amp;amp;");
+        xassert_eqq($ms->_("<5>{:ftext}", "<0>Ftext&amp;"), "<5>Ftext&amp;amp;");
+        xassert_eqq($ms->_("<5>{:ftext}", "<5>Ftext&amp;"), "<5>Ftext&amp;");
+
+        xassert_eqq($ms->_("<5>{a}", new FmtArg("a", "&")), "<5>&");
+        xassert_eqq($ms->_("<5>{a}", new FmtArg("a", "&", 0)), "<5>&amp;");
+
+        xassert_eqq($ms->_("{a}", new FmtArg("a", "&", 0)), "&");
+        xassert_eqq($ms->_("{a:html}", new FmtArg("a", "&", 0)), "&amp;");
+        xassert_eqq($ms->_("<5>{a}", new FmtArg("a", "&", 0)), "<5>&amp;");
+        xassert_eqq($ms->_("<5>{a:html}", new FmtArg("a", "&", 0)), "<5>&amp;");
     }
 }

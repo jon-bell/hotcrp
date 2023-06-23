@@ -1,6 +1,6 @@
 <?php
 // siteloader.php -- HotCRP autoloader
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class SiteLoader {
     static $map = [
@@ -11,6 +11,8 @@ class SiteLoader {
         "Collator" => "lib/collatorshim.php",
         "CsvGenerator" => "lib/csv.php",
         "CsvParser" => "lib/csv.php",
+        "Discrete_ReviewField" => "src/reviewfield.php",
+        "DiscreteValues_ReviewField" => "src/reviewfield.php",
         "False_SearchTerm" => "src/searchterm.php",
         "Fexpr" => "src/formula.php",
         "FmtArg" => "lib/fmt.php",
@@ -25,12 +27,9 @@ class SiteLoader {
         "MessageItem" => "lib/messageset.php",
         "PaperInfoSet" => "src/paperinfo.php",
         "PaperOptionList" => "src/paperoption.php",
-        "PaperValue" => "src/paperoption.php",
         "QrequestFile" => "lib/qrequest.php",
         "ReviewFieldInfo" => "src/reviewfield.php",
-        "ReviewSearchMatcher" => "src/search/st_review.php",
         "ReviewValues" => "src/reviewform.php",
-        "SearchWord" => "src/papersearch.php",
         "StreamS3Result" => "lib/s3result.php",
         "TagAnno" => "lib/tagger.php",
         "TagInfo" => "lib/tagger.php",
@@ -47,6 +46,7 @@ class SiteLoader {
         "_assignable.php" => ["a_", "src/assigners"],
         "_assigner.php" => ["a_", "src/assigners"],
         "_assignmentparser.php" => ["a_", "src/assigners"],
+        "_autoassigner.php" => ["aa_", "src/autoassigners"],
         "_batch.php" => ["", "batch"],
         "_capability.php" => ["cap_", "src/capabilities"],
         "_fexpr.php" =>  ["f_", "src/formulas"],
@@ -57,6 +57,8 @@ class SiteLoader {
         "_paperoption.php" => ["o_", "src/options"],
         "_page.php" => ["p_", "src/pages"],
         "_partial.php" => ["p_", "src/pages"],
+        "_reviewfield.php" => ["rf_", "src/reviewfields"],
+        "_reviewfieldsearch.php" => ["rf_", "src/reviewfields"],
         "_searchterm.php" => ["st_", "src/search"],
         "_setting.php" => ["s_", "src/settings"],
         "_settingrenderer.php" => ["s_", "src/settings"],
@@ -258,7 +260,7 @@ class SiteLoader {
     }
 
     /** @param string $class_name */
-    static function autoloader($class_name) {
+    static function autoload($class_name) {
         $f = self::$map[$class_name] ?? strtolower($class_name) . ".php";
         foreach (self::expand_includes(self::$root, $f, ["autoload" => true]) as $fx) {
             require_once($fx);
@@ -267,4 +269,4 @@ class SiteLoader {
 }
 
 SiteLoader::set_root();
-spl_autoload_register("SiteLoader::autoloader");
+spl_autoload_register("SiteLoader::autoload");

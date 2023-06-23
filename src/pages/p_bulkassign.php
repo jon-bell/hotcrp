@@ -71,7 +71,8 @@ class BulkAssign_Page {
 
     function complete_assignment($callback) {
         $ssel = SearchSelection::make($this->qreq, $this->user);
-        $aset = new AssignmentSet($this->user, true);
+        $aset = new AssignmentSet($this->user);
+        $aset->override_conflicts();
         if ($callback) {
             $aset->add_progress_handler($callback);
         }
@@ -98,8 +99,9 @@ class BulkAssign_Page {
             return false;
         }
 
-        $aset = new AssignmentSet($this->user, true);
-        $aset->set_flags(AssignmentState::FLAG_CSV_CONTEXT);
+        $aset = new AssignmentSet($this->user);
+        $aset->override_conflicts();
+        $aset->set_csv_context(true);
         $aset->add_progress_handler([$this, "keep_browser_alive"]);
         $defaults = $this->assignment_defaults();
         $text = convert_to_utf8($text);
@@ -272,8 +274,8 @@ Assignment methods:
             '</label>';
         Ht::stash_script('$(function(){
 $("#tsel").on("change",function(){
-hotcrp.foldup.call(this,null,{f:this.value!=="review"});
-hotcrp.foldup.call(this,null,{f:!/^(?:primary|secondary|(?:pc|meta)?review)$/.test(this.value),n:2});
+hotcrp.foldup.call(this,null,{open:this.value==="review"});
+hotcrp.foldup.call(this,null,{open:/^(?:primary|secondary|(?:pc|meta)?review)$/.test(this.value),n:2});
 }).trigger("change")})');
 
         $rev_rounds = $conf->round_selector_options(null);

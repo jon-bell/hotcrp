@@ -1,6 +1,6 @@
 <?php
 // settings/s_review.php -- HotCRP settings > reviews page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Review_Setting {
     /** @var int */
@@ -105,7 +105,6 @@ class Review_SettingParser extends SettingParser {
 
 
     static function print(SettingValues $sv) {
-        echo '<hr class="form-sep">';
         $sv->print_checkbox("review_open", "<b>Enable reviewing</b>");
         $sv->print_checkbox("comment_allow_always", "Allow comments even if reviewing is closed");
 
@@ -113,7 +112,7 @@ class Review_SettingParser extends SettingParser {
         $sv->print_radio_table("review_blind", [Conf::BLIND_ALWAYS => "Yes, reviews are anonymous",
                    Conf::BLIND_NEVER => "No, reviewer names are visible to authors",
                    Conf::BLIND_OPTIONAL => "Depends: reviewers decide whether to expose their names"],
-            '<strong>Review anonymity:</strong> Are reviewer names hidden from authors?');
+            '<strong>Review anonymity:</strong> Can authors see reviewer names?');
     }
 
     /** @param SettingValues $sv
@@ -124,37 +123,37 @@ class Review_SettingParser extends SettingParser {
         $id = $ctr !== "\$" && ctype_digit($idv) ? intval($idv) : -1;
         $deleted = ($sv->reqstr("review/{$ctr}/delete") ?? "") !== "";
 
-        echo '<div class="js-settings-review-round mt-3 mb-2 form-g',
+        echo '<fieldset id="review/', $ctr, '" class="js-settings-review-round mt-3 mb-2 form-g',
             $id > 0 ? "" : " is-new", $deleted ? " deleted" : "",
-            '" data-exists-count="', $id > 0 ? $round_map[$id - 1] ?? 0 : 0,
-            '" id="review/', $ctr, '"><div class="mb-2">',
+            '" data-exists-count="', $id > 0 ? $round_map[$id - 1] ?? 0 : 0, '">',
             Ht::hidden("review/{$ctr}/id", $id > 0 ? $id : "new", ["data-default-value" => $id > 0 ? $id : ""]),
             Ht::hidden("review/{$ctr}/delete", $deleted ? "1" : "", ["data-default-value" => ""]);
         $namesi = $sv->si("review/{$ctr}/name");
-        $sv->print_feedback_at($namesi->name);
-        echo $sv->label($namesi->name, "Round name"), ' &nbsp;',
-            $sv->entry($namesi->name, ["class" => "uii uich js-settings-review-round-name"]);
+        echo '<legend>';
+        echo $sv->label($namesi->name, "Review round"), " ",
+            $sv->entry($namesi->name, ["class" => "ml-1 uii uich js-settings-review-round-name want-delete-marker"]);
         if ($id > 1 || count($sv->conf->defined_rounds()) > 1) {
             echo Ht::button(Icons::ui_use("trash"), ["id" => "review/{$ctr}/deleter", "class" => "ui js-settings-review-round-delete ml-2 need-tooltip", "aria-label" => "Delete review round", "tabindex" => -1]);
         }
         if ($id > 0 && ($round_map[$id - 1] ?? 0) > 0) {
             echo '<span class="ml-3 d-inline-block">',
-                '<a href="', $sv->conf->hoturl("search", ["q" => "re:" . ($id > 1 ? $sv->conf->round_name($id - 1) : "unnamed")]), '" target="_blank">',
+                '<a href="', $sv->conf->hoturl("search", ["q" => "re:" . ($id > 1 ? $sv->conf->round_name($id - 1) : "unnamed")]), '" target="_blank" rel="noopener">',
                 plural($round_map[$id - 1], "review"), '</a></span>';
         }
         if ($ctr === '$') {
             echo '<div class="f-h fx">Names like “R1” and “R2” work well.</div>';
         }
-        echo '</div>';
+        echo '</legend>';
+        $sv->print_feedback_at($namesi->name);
 
         // deadlines
-        echo "<div class=\"f-mcol ml-5\" id=\"review/{$ctr}/edit\"><div class=\"flex-grow-0\">";
+        echo "<div id=\"review/{$ctr}/edit\" class=\"f-mcol\"><div class=\"flex-grow-0\">";
         $sv->print_entry_group("review/{$ctr}/soft", "PC deadline", ["horizontal" => true]);
         $sv->print_entry_group("review/{$ctr}/done", "Hard deadline", ["horizontal" => true]);
         echo '</div><div class="flex-grow-0">';
         $sv->print_entry_group("review/{$ctr}/external_soft", "External deadline", ["horizontal" => true]);
         $sv->print_entry_group("review/{$ctr}/external_done", "Hard deadline", ["horizontal" => true]);
-        echo "</div></div></div>";
+        echo "</div></div></fieldset>";
         if ($deleted) {
             echo Ht::unstash_script("\$(function(){\$(\"#review\\\\/{$ctr}\\\\/deleter\").click()})");
         }
@@ -191,10 +190,10 @@ class Review_SettingParser extends SettingParser {
             $n = $sv->vstr("review/{$ctr}/name");
             $sel[$ctr] = $n === "" ? "unnamed" : $n;
         }
-        $sv->print_select_group("review_default_round_index", null,
-            $sel,
-            ["class" => "settings-review-round-selector"],
-            "New review assignments will use this round unless otherwise specified.");
+        $sv->print_select_group("review_default_round_index", null, $sel, [
+                "class" => "settings-review-round-selector",
+                "hint" => "New review assignments will use this round unless otherwise specified."
+            ]);
         $sv->print_select_group("review_default_external_round_index", null,
             [0 => "same as PC"] + $sel,
             ["class" => "settings-review-round-selector"]);
@@ -202,7 +201,6 @@ class Review_SettingParser extends SettingParser {
 
 
     static function print_pc(SettingValues $sv) {
-        echo '<div class="has-fold fold2c">';
         echo '<div class="form-g has-fold foldo">';
         $sv->print_checkbox("review_self_assign", "PC members can review any submission", ["class" => "uich js-foldup"]);
         if ($sv->conf->setting("pcrev_any")
@@ -218,7 +216,7 @@ class Review_SettingParser extends SettingParser {
         }
         $sv->print_radio_table("review_identity_visibility_pc", [0 => "Yes",
                 1 => "Only after completing a review for the same submission"],
-            'Can PC members see <strong>reviewer names<span class="fn2"> and comments</span></strong> except for conflicts?',
+            'Can PC members see <strong class="has-comment-visibility-anonymous is-identity">reviewer names and comments</strong> except for conflicts?',
             ["after" => $hint]);
 
 
@@ -239,7 +237,7 @@ class Review_SettingParser extends SettingParser {
                 Conf::PCSEEREV_UNLESSINCOMPLETE => "Yes, unless they haven’t completed an assigned review for the same submission",
                 Conf::PCSEEREV_UNLESSANYINCOMPLETE => "Yes, after completing all their assigned reviews",
                 Conf::PCSEEREV_IFCOMPLETE => "Only after completing a review for the same submission"
-            ], 'Can PC members see <strong>review contents<span class="fx2"> and comments</span></strong> except for conflicts?',
+            ], 'Can PC members see <strong class="has-comment-visibility-anonymous is-contents">review contents</strong> except for conflicts?',
             ["after" => $hint]);
 
         echo '<hr class="form-nearby form-sep">';
@@ -247,17 +245,26 @@ class Review_SettingParser extends SettingParser {
 
 
         echo '<hr class="form-sep">';
-        $sv->print_checkbox("comment_visibility_anonymous", "PC can see comments when reviews are anonymous", ["class" => "uich js-foldup", "data-fold-target" => "2", "hint_class" => "fx2"], "Commenter names are hidden when reviews are anonymous.");
-        echo "</div>\n";
+        $sv->print_checkbox("comment_visibility_anonymous", "Allow anonymous reviewer discussion", [
+            "class" => "uich js-settings-comment-visibility-anonymous",
+            "hint_class" => "has-comment-visibility-anonymous if-anonymous hidden",
+            "hint" => "Commenter names will be hidden when reviews are anonymous."
+        ]);
     }
 
 
     static function print_extrev_view(SettingValues $sv) {
+        $sv->print_radio_table("review_identity_visibility_external", [
+                2 => "Yes",
+                1 => "Only after completing their review",
+                0 => "No"
+            ], 'Can external reviewers see <strong class="has-comment-visibility-anonymous is-identity">reviewer names and comments</strong> for their assigned submissions?');
+
+        echo '<hr class="form-sep">';
         $sv->print_radio_table("review_visibility_external", [
-                0 => "No",
-                1 => "Yes, but they can’t see comments or reviewer names",
-                2 => "Yes"
-            ], 'Can external reviewers see reviews, comments, and eventual decisions for their assigned submissions, once they’ve completed a review?');
+                1 => "Yes",
+                0 => "No"
+            ], 'Can external reviewers see <strong class="has-comment-visibility-anonymous is-contents-external">review contents and eventual decisions</strong> for their assigned submissions, after completing their review?');
     }
     static function print_extrev_editdelegate(SettingValues $sv) {
         echo '<div id="foldreview_proposal_editable" class="form-g has-fold',
@@ -294,8 +301,8 @@ class Review_SettingParser extends SettingParser {
         $sv->set_oldv("mailbody_requestreview", $t["body"]);
         echo '<div class="', $sv->control_class("mailbody_requestreview", "f-i"), '">',
             '<div class="f-c n">',
-            '<a class="ui q js-foldup" href="">', expander(null, 0),
-            '<label for="mailbody_requestreview">Mail template for external review requests</label></a>',
+            '<button type="button" class="q ui js-foldup">', expander(null, 0),
+            '<label for="mailbody_requestreview">Mail template for external review requests</label></button>',
             '<span class="fx"> (<a href="', $sv->conf->hoturl("mail"), '">keywords</a> allowed; set to empty for default)</span></div>',
             $sv->textarea("mailbody_requestreview", ["class" => "text-monospace fx", "cols" => 80, "rows" => 20]);
         $sv->print_feedback_at("mailbody_requestreview");
@@ -342,6 +349,12 @@ class Review_SettingParser extends SettingParser {
                 $this->apply_review_default_round_index($si, $sv, trim($n));
             }
             return true;
+        } else if ($si->name === "review_visibility_external") {
+            if (($n = $sv->reqstr($si->name)) === "blind") {
+                $sv->save($si, 1);
+                $sv->save("review_identity_visibility_external", 0);
+            }
+            return false;
         } else if ($si->name2 === "/name") {
             if (($n = $sv->base_parse_req($si)) !== null
                 && $n !== $sv->oldv($si)) {

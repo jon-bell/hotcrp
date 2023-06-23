@@ -18,8 +18,7 @@ class Tags_SettingParser extends SettingParser {
     function set_oldv(Si $si, SettingValues $sv) {
         if ($si->name === "tag_readonly") {
             $ts = array_filter($sv->conf->tags()->filter("chair"), function ($t) {
-                return !str_starts_with($t->tag, "~~")
-                    && !str_starts_with($t->tag, "perm:");
+                return !str_starts_with($t->tag, "~~");
             });
             $sv->set_oldv("tag_readonly", Tags_SettingParser::render_tags($ts));
         } else if ($si->name === "tag_sitewide") {
@@ -44,21 +43,40 @@ class Tags_SettingParser extends SettingParser {
         return join(" ", array_map(function ($t) { return $t->tag; }, $tl));
     }
     static function print_tag_chair(SettingValues $sv) {
-        $sv->print_entry_group("tag_readonly", null, ["class" => "need-suggest tags"], "PC members can see these tags, but only administrators can change them.");
+        $sv->print_entry_group("tag_readonly", null, [
+            "class" => "need-suggest tags",
+            "hint" => "PC members can see these tags, but only administrators can change them.",
+            "autocomplete" => "off"
+        ]);
     }
     static function print_tag_sitewide(SettingValues $sv) {
         if ($sv->newv("tag_sitewide") || $sv->conf->has_any_manager()) {
-            $sv->print_entry_group("tag_sitewide", null, ["class" => "need-suggest tags"], "Administrators can see and change these tags for every submission.");
+            $sv->print_entry_group("tag_sitewide", null, [
+                "class" => "need-suggest tags",
+                "hint" => "Administrators can see and change these tags for every submission.",
+                "autocomplete" => "off"
+            ]);
         }
     }
     static function print_tag_approval(SettingValues $sv) {
-        $sv->print_entry_group("tag_vote_approval", null, ["class" => "need-suggest tags"], "<a href=\"" . $sv->conf->hoturl("help", "t=votetags") . "\">Help</a>");
+        $sv->print_entry_group("tag_vote_approval", null, [
+            "class" => "need-suggest tags",
+            "hint" => "<a href=\"" . $sv->conf->hoturl("help", "t=votetags") . "\">Help</a>",
+            "autocomplete" => "off"
+        ]);
     }
     static function print_tag_vote(SettingValues $sv) {
-        $sv->print_entry_group("tag_vote_allotment", null, ["class" => "need-suggest tags"], "“vote#10” declares an allotment of 10 votes per PC member. (<a href=\"" . $sv->conf->hoturl("help", "t=votetags") . "\">Help</a>)");
+        $sv->print_entry_group("tag_vote_allotment", null, [
+            "class" => "need-suggest tags",
+            "hint" => "“vote#10” declares an allotment of 10 votes per PC member. (<a href=\"" . $sv->conf->hoturl("help", "t=votetags") . "\">Help</a>)",
+            "autocomplete" => "off"
+        ]);
     }
     static function print_tag_rank(SettingValues $sv) {
-        $sv->print_entry_group("tag_rank", null, null, 'The <a href="' . $sv->conf->hoturl("offline") . '">offline reviewing page</a> will expose support for uploading rankings by this tag. (<a href="' . $sv->conf->hoturl("help", "t=ranking") . '">Help</a>)');
+        $sv->print_entry_group("tag_rank", null, [
+            "hint" => 'The <a href="' . $sv->conf->hoturl("offline") . '">offline reviewing page</a> will expose support for uploading rankings by this tag. (<a href="' . $sv->conf->hoturl("help", "t=ranking") . '">Help</a>)',
+            "autocomplete" => "off"
+        ]);
     }
     static function print_tag_seeall(SettingValues $sv) {
         $sv->print_checkbox("tag_visibility_conflict", "PC can see tags for conflicted submissions");

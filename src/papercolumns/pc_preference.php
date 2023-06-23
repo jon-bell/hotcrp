@@ -1,6 +1,6 @@
 <?php
 // pc_preference.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Preference_PaperColumn extends PaperColumn {
     /** @var bool */
@@ -30,10 +30,9 @@ class Preference_PaperColumn extends PaperColumn {
         if ($cj->edit ?? false) {
             $this->mark_editable();
         }
-        $this->statistics = new ScoreInfo;
     }
     function add_decoration($decor) {
-        if ($decor === "topicscore" || $decor === "topicsort") {
+        if ($decor === "topicscore" || $decor === "topic_score" || $decor === "topicsort") {
             $this->secondary_sort_topic_score = true;
             return $this->__add_decoration($decor);
         } else if ($decor === "edit") {
@@ -87,31 +86,35 @@ class Preference_PaperColumn extends PaperColumn {
         list($ap, $ae) = $this->sortable_preference($a);
         list($bp, $be) = $this->sortable_preference($b);
         if ($ap !== $bp) {
-            return $bp <=> $ap;
+            return $ap <=> $bp;
         } else if ($ae !== $be) {
             if (($ae === null) !== ($be === null)) {
                 return $ae === null ? 1 : -1;
             }
-            return (int) $be <=> (int) $ae;
+            return (int) $ae <=> (int) $be;
         } else if ($this->secondary_sort_topic_score) {
-            return $b->topic_interest_score($this->user) <=> $a->topic_interest_score($this->user);
+            return $a->topic_interest_score($this->user) <=> $b->topic_interest_score($this->user);
         } else {
             return 0;
         }
     }
-    function analyze(PaperList $pl) {
-        $pfcol = $rtuid = [];
-        foreach ($pl->vcolumns() as $fdef) {
-            if ($fdef instanceof ReviewerType_PaperColumn
-                || $fdef instanceof AssignReview_PaperColumn) {
-                $rtuid[] = $fdef->contact()->contactId;
-            } else if ($fdef instanceof Preference_PaperColumn) {
-                $pfcol[] = $fdef;
+    function reset(PaperList $pl) {
+        if ($this->show_conflict === null) {
+            $pfcol = $rtuid = [];
+            foreach ($pl->vcolumns() as $fdef) {
+                if ($fdef instanceof ReviewerType_PaperColumn
+                    || $fdef instanceof AssignReview_PaperColumn) {
+                    $rtuid[] = $fdef->contact()->contactId;
+                } else if ($fdef instanceof Preference_PaperColumn) {
+                    $pfcol[] = $fdef;
+                }
             }
+            $this->show_conflict = count($pfcol) !== 1
+                || count($rtuid) !== 1
+                || $rtuid[0] !== $this->user->contactId;
         }
-        $this->show_conflict = count($pfcol) !== 1
-            || count($rtuid) !== 1
-            || $rtuid[0] !== $this->user->contactId;
+        $this->statistics = new ScoreInfo;
+        $this->override_statistics = null;
     }
     function header(PaperList $pl, $is_text) {
         if ($this->user === $this->viewer || $this->as_row) {
@@ -201,19 +204,17 @@ class Preference_PaperColumn extends PaperColumn {
         $t = $this->unparse_statistic($this->statistics, $stat);
         if ($this->override_statistics) {
             $tt = $this->unparse_statistic($this->override_statistics, $stat);
-            if ($t !== $tt) {
-                $t = "<span class=\"fn5\">{$t}</span><span class=\"fx5\">{$tt}</span>";
-            }
+            $t = $pl->wrap_conflict($t, $tt);
         }
         return $t;
     }
 
-    static function expand($name, Contact $user, $xfj, $m) {
-        if (!($fj = (array) $user->conf->basic_paper_column("pref", $user))) {
+    static function expand($name, XtParams $xtp, $xfj, $m) {
+        if (!($fj = (array) $xtp->conf->basic_paper_column("pref", $xtp->user))) {
             return null;
         }
         $rs = [];
-        foreach (ContactSearch::make_pc($m[1], $user)->users() as $u) {
+        foreach (ContactSearch::make_pc($m[1], $xtp->user)->users() as $u) {
             if ($u->roles & Contact::ROLE_PC) {
                 $fj["name"] = "pref:{$u->email}";
                 $fj["user"] = $u->email;
@@ -221,7 +222,7 @@ class Preference_PaperColumn extends PaperColumn {
             }
         }
         if (empty($rs)) {
-            PaperColumn::column_error($user, "<0>PC member ‘{$m[1]}’ not found");
+            PaperColumn::column_error($xtp, "<0>PC member ‘{$m[1]}’ not found");
         }
         return $rs;
     }

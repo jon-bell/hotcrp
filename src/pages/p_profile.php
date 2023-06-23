@@ -34,6 +34,56 @@ class Profile_Page {
     }
 
 
+    /** @return never */
+    private function fail_user_search($text) {
+        Multiconference::fail($this->qreq, 404, ["title" => "Profile"], $text);
+    }
+
+    /** @param string $u
+     * @return Contact */
+    private function handle_user_search($u) {
+        if (!$this->viewer->privChair) {
+            Multiconference::fail($this->qreq, 403, ["title" => "Profile"], "<5>Permission error: you can only access <a href=\"" . $this->conf->hoturl("profile", ["u" => null]) . "\">your own profile</a>");
+        }
+
+        $user = null;
+        if (ctype_digit($u)) {
+            $user = $this->conf->user_by_id(intval($u));
+        } else if ($u === "" && $this->qreq->search) {
+            $this->conf->redirect_hoturl("users");
+        } else if (($user = $this->conf->user_by_email($u))) {
+            // OK
+        } else if ($this->qreq->search) {
+            $cs = new ContactSearch(ContactSearch::F_USER, $u, $this->viewer);
+            if ($cs->user_ids()) {
+                $list = (new SessionList("u/all/" . urlencode($this->qreq->search), $cs->user_ids(), "“{$u}”"))
+                    ->set_urlbase($this->conf->hoturl_raw("users", ["t" => "all"], Conf::HOTURL_SITEREL));
+                $list->set_cookie($this->qreq);
+                $user = $this->conf->user_by_id($cs->user_ids()[0]);
+                $this->conf->redirect_hoturl("profile", ["u" => $user->email]);
+            } else {
+                $this->fail_user_search("<0>User matching ‘{$u}’ not found");
+            }
+        }
+        if (!$user) {
+            $this->fail_user_search("<0>User ‘{$u}’ not found");
+        }
+
+        if (isset($this->qreq->profile_contactid)
+            && $this->qreq->profile_contactid !== (string) $user->contactId) {
+            if (isset($this->qreq->save) || isset($this->qreq->savebulk)) {
+                $this->conf->error_msg("<0>Changes not saved; your session has changed since you last reloaded this tab");
+            }
+            $this->conf->redirect_self($this->qreq, ["u" => $u]);
+        }
+
+        if ($user->contactId > 0 && $user->contactId === $this->viewer->contactId) {
+            return $this->viewer;
+        } else {
+            return $user;
+        }
+    }
+
     private function find_user() {
         // analyze URL and request
         if ($this->qreq->u === null && ($this->qreq->user || $this->qreq->contact)) {
@@ -54,68 +104,25 @@ class Profile_Page {
                 $this->qreq->t = $p;
             }
         }
-        if ($this->viewer->privChair && $this->qreq->new) {
-            $this->qreq->u = "new";
-        }
-        if ($this->qreq->u === "self") {
-            $this->qreq->u = "me";
-        }
 
-        // parse requested user
-        $user = $this->viewer;
+        // find requested user
         $u = $this->qreq->u ?? "me";
-        if ($this->viewer->privChair && $u !== "me") {
-            if ($u === "new" || $u === "bulk") {
-                $user = Contact::make($this->conf);
-                $this->page_type = $u === "new" ? 1 : 2;
-            } else if (ctype_digit($u)) {
-                $user = $this->conf->user_by_id(intval($u));
-            } else if ($u === "" && $this->qreq->search) {
-                $this->conf->redirect_hoturl("users");
-            } else if (($user = $this->conf->user_by_email($u))) {
-                // got it
-            } else if ($this->qreq->search) {
-                $cs = new ContactSearch(ContactSearch::F_USER, $u, $this->viewer);
-                if ($cs->user_ids()) {
-                    $user = $this->conf->user_by_id(($cs->user_ids())[0]);
-                    $list = (new SessionList("u/all/" . urlencode($this->qreq->search), $cs->user_ids(), "“{$u}”"))
-                        ->set_urlbase($this->conf->hoturl_raw("users", ["t" => "all"], Conf::HOTURL_SITEREL));
-                    $list->set_cookie($this->viewer);
-                    $this->qreq->u = $user->email;
-                } else {
-                    $this->conf->error_msg("<0>User ‘{$u}’ not found");
-                    unset($this->qreq->u);
-                }
-                $this->conf->redirect_self($this->qreq);
-            }
-        }
-        if ($user && $user->contactId && $user->contactId === $this->viewer->contactId) {
+        if ($u === "me"
+            || $u === "self"
+            || $u === ""
+            || ($this->viewer->has_email() && strcasecmp($u, $this->viewer->email) === 0)
+            || ($this->viewer->contactId > 0 && $u === (string) $this->viewer->contactId)) {
             $user = $this->viewer;
-        }
-
-        // redirect if requested user isn't loaded user
-        if ($u === "me") {
-            if ($user !== $this->viewer) {
-                unset($this->qreq->u);
-                $this->conf->redirect_self($this->qreq);
-            }
-        } else if (!$user
-                   || ($u !== null
-                       && $u !== (string) $user->contactId
-                       && strcasecmp($u, $user->email) !== 0
-                       && ($user->contactId || $this->page_type === 0))
-                   || (isset($this->qreq->profile_contactid)
-                       && $this->qreq->profile_contactid !== (string) $user->contactId)) {
-            if (!$user) {
-                $this->conf->error_msg("<0>User not found");
-            } else if (isset($this->qreq->save) || isset($this->qreq->savebulk)) {
-                $this->conf->error_msg("<0>Changes not saved; your session has changed since you last reloaded this tab");
-            }
-            $this->conf->redirect_self($this->qreq, ["u" => null]);
+        } else if ($this->viewer->privChair
+                   && ($u === "new" || $u === "bulk")) {
+            $user = Contact::make($this->conf);
+            $this->page_type = $u === "new" ? 1 : 2;
+        } else {
+            $user = $this->handle_user_search($u);
         }
 
         // load initial information about new user from submissions
-        if (($user !== $this->viewer || !$this->viewer->has_account_here())
+        if (($user !== $this->viewer || !$user->has_account_here())
             && $user->has_email()
             && !$user->firstName
             && !$user->lastName
@@ -324,7 +331,7 @@ class Profile_Page {
             $ms->splice_item($mpos++, MessageItem::success($this->conf->_("<5>Activated accounts with email notification %#s", $notified)));
         }
         if (!empty($nochanges)) {
-            $ms->splice_item($mpos++, new MessageItem(null, $this->conf->_("<5>No changes to accounts %#s", $nochanges), MessageSet::MARKED_NOTE));
+            $ms->splice_item($mpos++, new MessageItem(null, $this->conf->_("<5>No changes to accounts %#s", $nochanges), MessageSet::WARNING_NOTE));
         } else if (!$ms->has_message()) {
             $ms->splice_item($mpos++, new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
         }
@@ -373,7 +380,7 @@ class Profile_Page {
             }
             if (empty($this->ustatus->diffs)) {
                 if (!$this->ustatus->has_message_at("email_confirm")) {
-                    $this->ustatus->splice_msg($pos++, "<0>No changes", MessageSet::MARKED_NOTE);
+                    $this->ustatus->splice_msg($pos++, "<0>No changes", MessageSet::WARNING_NOTE);
                 }
             } else if ($this->ustatus->notified) {
                 $this->ustatus->splice_msg($pos++, "<0>Changes saved{$diffs} and user notified", MessageSet::SUCCESS);
@@ -436,7 +443,7 @@ class Profile_Page {
                 $this->conf->redirect_self($this->qreq);
             }
         } else {
-            $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::MARKED_NOTE));
+            $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
         }
     }
 
@@ -463,7 +470,8 @@ class Profile_Page {
                 $this->conf->qe_raw("delete from $table where contactId={$this->user->contactId}");
             }
             // delete twiddle tags
-            $assigner = new AssignmentSet($this->viewer, true);
+            $assigner = new AssignmentSet($this->viewer);
+            $assigner->override_conflicts();
             $assigner->parse("paper,tag\nall,{$this->user->contactId}~all#clear\n");
             $assigner->execute();
             // clear caches
@@ -584,7 +592,7 @@ class Profile_Page {
             $title = $this->viewer->name_html_for($this->user) . " profile";
         }
         $this->qreq->print_header($title, "account", [
-            "title_div" => '<hr class="c">',
+            "title_div" => "",
             "body_class" => "leftmenu",
             "action_bar" => QuicklinksRenderer::make($this->qreq, "account"),
             "save_messages" => true
@@ -604,14 +612,14 @@ class Profile_Page {
             $form_params["ls"] = $this->qreq->ls;
         }
         echo Ht::form($this->conf->hoturl("=profile", $form_params), [
-            "id" => "form-profile",
+            "id" => "f-profile",
             "class" => "need-unload-protection",
             "data-user" => $this->page_type ? null : $this->user->email
         ]);
 
         // left menu
         echo '<div class="leftmenu-left"><nav class="leftmenu-menu">',
-            '<h1 class="leftmenu"><a href="" class="uic js-leftmenu q">Account</a></h1>',
+            '<h1 class="leftmenu"><button type="button" class="q uic js-leftmenu">Account</button></h1>',
             '<ul class="leftmenu-list">';
 
         if ($this->viewer->privChair) {
@@ -717,7 +725,7 @@ class Profile_Page {
         echo "</main></form>";
 
         if ($this->page_type === 0) {
-            Ht::stash_script('hotcrp.highlight_form_children("#form-profile")');
+            Ht::stash_script('hotcrp.highlight_form_children("#f-profile")');
         }
         $this->qreq->print_footer();
     }

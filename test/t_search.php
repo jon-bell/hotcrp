@@ -1,6 +1,6 @@
 <?php
 // t_search.php -- HotCRP tests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Search_Tester {
     /** @var Conf
@@ -30,6 +30,10 @@ class Search_Tester {
                     "#foo in:submitted");
         xassert_eqq(PaperSearch::canonical_query("foo OR abstract:bar", "", "", "tag", $this->conf, "s"),
                     "(#foo OR abstract:bar) in:submitted");
+        xassert_eqq(PaperSearch::canonical_query("-has:submission", "", "", "", $this->conf),
+                    "-has:submission");
+        xassert_eqq(PaperSearch::canonical_query("NOT (foo OR bar)", "", "", "", $this->conf),
+                    "NOT (foo OR bar)");
     }
 
     function test_sort_etag() {
@@ -76,31 +80,31 @@ class Search_Tester {
         xassert_eqq($rl[3], "R3");
 
         $u = $this->conf->root_user();
-        $st = (new PaperSearch($u, "hello"))->term();
+        $st = (new PaperSearch($u, "hello"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [0, true]);
 
-        $st = (new PaperSearch($u, ""))->term();
+        $st = (new PaperSearch($u, ""))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [0, false]);
 
-        $st = (new PaperSearch($u, "round:unnamed"))->term();
+        $st = (new PaperSearch($u, "round:unnamed"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [1, false]);
 
-        $st = (new PaperSearch($u, "round:unnamed OR ANY"))->term();
+        $st = (new PaperSearch($u, "round:unnamed OR ANY"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [0, false]);
 
-        $st = (new PaperSearch($u, "round:unnamed OR round:R1"))->term();
+        $st = (new PaperSearch($u, "round:unnamed OR round:R1"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [3, false]);
 
-        $st = (new PaperSearch($u, "re:unnamed OR re:R1"))->term();
+        $st = (new PaperSearch($u, "re:unnamed OR re:R1"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [3, false]);
 
-        $st = (new PaperSearch($u, "re:unnamed OR re:R1:ext"))->term();
+        $st = (new PaperSearch($u, "re:unnamed OR re:R1:ext"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [3, true]);
 
-        $st = (new PaperSearch($u, "re:unnamed OR (re:R1:ext AND re:R2)"))->term();
+        $st = (new PaperSearch($u, "re:unnamed OR (re:R1:ext AND re:R2)"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [1, true]);
 
-        $st = (new PaperSearch($u, "(re:unnamed) OR (re:R1 OR re:R2)"))->term();
+        $st = (new PaperSearch($u, "(re:unnamed) OR (re:R1 OR re:R2)"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [7, false]);
     }
 }

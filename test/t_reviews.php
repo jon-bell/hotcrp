@@ -1,6 +1,6 @@
 <?php
 // t_reviews.php -- HotCRP tests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Reviews_Tester {
     /** @var Conf
@@ -17,7 +17,7 @@ class Reviews_Tester {
     public $u_lixia;
     /** @var Contact
      * @readonly */
-    public $u_mjh; // pc
+    public $u_mjh;
     /** @var string */
     private $review1A;
 
@@ -132,6 +132,14 @@ class Reviews_Tester {
         assert_search_papers($this->u_chair, "ovemer:5", "1");
     }
 
+    private function print_review_history(ReviewInfo $rrow) {
+        $result = $rrow->conf->qe("select * from PaperReviewHistory where paperId=? and reviewId=? order by reviewTime asc", $rrow->paperId, $rrow->reviewId);
+        while (($rhrow = ReviewHistoryInfo::fetch($result))) {
+            error_log(json_encode($rhrow));
+        }
+        $result->close();
+    }
+
     function test_offline_review_update() {
         $paper1 = $this->conf->checked_paper_by_id(1, $this->u_chair);
         fresh_review($paper1, $this->u_mgbaker);
@@ -144,7 +152,7 @@ class Reviews_Tester {
 
         assert_search_papers($this->u_chair, "ovemer:4", "1");
         $rrow = fresh_review($paper1, $this->u_mgbaker);
-        xassert_eqq($rrow->fval("t03"), "  This is a test of leading whitespace\n\n  It should be preserved\nAnd defended\n");
+        xassert_eqq($rrow->fidval("t03"), "  This is a test of leading whitespace\n\n  It should be preserved\nAnd defended\n");
 
         // different-conference form fails
         $tf = ReviewValues::make_text($this->conf->review_form(), preg_replace('/Testconf I/', 'Testconf IIII', $this->review1A), "review1A-1.txt");
@@ -159,13 +167,15 @@ class Reviews_Tester {
         xassert($tf->has_problem_at("s01"));
 
         // invalid “No entry” fails
+        //$this->print_review_history($rrow);
         $tf = ReviewValues::make_text($this->conf->review_form(), preg_replace('/^4/m', 'No entry', $this->review1A), "review1A-3.txt");
         xassert($tf->parse_text(false));
         xassert($tf->check_and_save($this->u_mgbaker));
-        xassert_eqq(join(" ", $tf->unchanged), "#1A");
+        xassert_eqq(join(" ", $tf->unchanged ?? []), "#1A");
         xassert($tf->has_problem_at("s01"));
         xassert_str_contains($tf->feedback_text_at("s01"), "Entry required");
         //error_log(var_export($tf->message_list(), true));
+        //error_log(json_encode($tf->json_report()));
     }
 
     function test_offline_review_different_reviewer() {
@@ -190,6 +200,7 @@ class Reviews_Tester {
         xassert(!$tf->has_problem_at("reviewerEmail"));
         assert_search_papers($this->u_chair, "ovemer:4", "");
         assert_search_papers($this->u_chair, "ovemer:5", "1");
+        assert_search_papers($this->u_chair, "ovemer:>4", "1");
         //error_log(var_export($tf->message_list(), true));
     }
 
@@ -205,7 +216,7 @@ class Reviews_Tester {
             "rf/1/values_text" => "1. Reject\n2. Weak reject\n3. Weak accept\n4. Accept\n5. Strong accept\nNo entry\n"
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
         $rfield = $this->conf->checked_review_field("s01");
         xassert(!$rfield->required);
 
@@ -235,12 +246,22 @@ class Reviews_Tester {
             "rf/1/values_text" => "1. Reject\n2. Weak reject\n3. Weak accept\nNo entry\n"
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
 
         // overall-merit 4 has been removed, revexp has not
-        assert_search_papers($this->u_chair, "ovemer:4", "");
+        assert_search_papers_ignore_warnings($this->u_chair, "ovemer:4", "");
         assert_search_papers($this->u_chair, "revexp:2", "1");
         assert_search_papers($this->u_chair, "has:revexp", "1");
+
+        // restore “4” and “5” choices
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_rf" => 1,
+            "rf/1/name" => "Overall merit",
+            "rf/1/id" => "s01",
+            "rf/1/values_text" => "1. Reject\n2. Weak reject\n3. Weak accept\n4. Accept\n5. Strong accept\n"
+        ]);
+        xassert($sv->execute());
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
     }
 
     function test_remove_review_field() {
@@ -254,7 +275,7 @@ class Reviews_Tester {
             "rf/1/order" => 0
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
 
         // Add reviewer expertise back
         $sv = SettingValues::make_request($this->u_chair, [
@@ -266,7 +287,7 @@ class Reviews_Tester {
             "rf/1/order" => 1.5
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
 
         // It has been removed from the review
         assert_search_papers($this->u_chair, "has:revexp", "");
@@ -282,11 +303,11 @@ class Reviews_Tester {
             "ready" => true
         ]);
         $rrow = fresh_review(1, $this->u_mgbaker);
-        xassert_eqq((string) $rrow->fval("s01"), "2");
-        xassert_eqq((string) $rrow->fval("s02"), "1");
-        xassert_eqq((string) $rrow->fval("t01"), "This is the summary\n");
-        xassert_eqq((string) $rrow->fval("t02"), "Comments for äuthor\n");
-        xassert_eqq((string) $rrow->fval("t03"), "Comments for PC\n");
+        xassert_eqq((string) $rrow->fidval("s01"), "2");
+        xassert_eqq((string) $rrow->fidval("s02"), "1");
+        xassert_eqq((string) $rrow->fidval("t01"), "This is the summary\n");
+        xassert_eqq((string) $rrow->fidval("t02"), "Comments for äuthor\n");
+        xassert_eqq((string) $rrow->fidval("t03"), "Comments for PC\n");
 
         assert_search_papers($this->u_chair, "has:papsum", "1");
         assert_search_papers($this->u_chair, "has:comaut", "1");
@@ -326,7 +347,7 @@ class Reviews_Tester {
             "rf/22/name" => "Text 11", "rf/22/order" => 5.11, "rf/22/id" => "t11"
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
 
         save_review(1, $this->u_mgbaker, [
             "ovemer" => 2, "revexp" => 1, "papsum" => "This is the summary",
@@ -365,7 +386,7 @@ class Reviews_Tester {
         assert_search_papers($this->u_chair, "has:tex11", "");
 
         $rrow = fresh_review(1, $this->u_mgbaker);
-        xassert_eqq((string) $rrow->fval("s16"), "3");
+        xassert_eqq((string) $rrow->fidval("s16"), "3");
 
         // Remove some fields and truncate their options
         $sv = SettingValues::make_request($this->u_chair, [
@@ -375,7 +396,7 @@ class Reviews_Tester {
             "rf/3/name" => "Text 10", "rf/3/order" => 0, "rf/3/id" => "t10"
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
 
         $sv = SettingValues::make_request($this->u_chair, [
             "has_rf" => 1,
@@ -383,12 +404,12 @@ class Reviews_Tester {
             "rf/2/name" => "Text 10", "rf/2/order" => 101, "rf/2/id" => "t10"
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
 
         $rrow = fresh_review(1, $this->u_mgbaker);
-        xassert($rrow->fval("s15") === null || (string) $rrow->fval("s15") === "0");
-        xassert($rrow->fval("s16") === null || (string) $rrow->fval("s16") === "0");
-        xassert($rrow->fval("t10") === null || (string) $rrow->fval("t10") === "");
+        xassert($rrow->fidval("s15") === null || (string) $rrow->fidval("s15") === "0");
+        xassert($rrow->fidval("s16") === null || (string) $rrow->fidval("s16") === "0");
+        xassert($rrow->fidval("t10") === null || (string) $rrow->fidval("t10") === "");
 
         assert_search_papers($this->u_chair, "has:sco3", "1");
         assert_search_papers($this->u_chair, "has:sco4", "1");
@@ -499,8 +520,8 @@ class Reviews_Tester {
         // check handling of sfields and tfields: clear extension fields
         save_review(1, $this->u_mgbaker, [
             "ovemer" => 2, "revexp" => 1, "papsum" => "",
-            "comaut" => "", "compc" => "", "sco12" => 0,
-            "sco13" => 0, "sco14" => 0, "sco15" => 0, "sco16" => 0,
+            "comaut" => "", "compc" => "", "sco12" => "",
+            "sco13" => "", "sco14" => "", "sco15" => "", "sco16" => "",
             "tex4" => "", "tex5" => "", "tex6" => "", "tex7" => "",
             "tex8" => "", "tex9" => "", "tex10" => "", "tex11" => "",
             "ready" => true
@@ -514,9 +535,9 @@ class Reviews_Tester {
         save_review(1, $this->u_mgbaker, [
             "ovemer" => 2, "revexp" => 1, "papsum" => "This is the summary",
             "comaut" => "Comments for äuthor", "compc" => "Comments for PC",
-            "sco3" => 1, "sco4" => 2, "sco5" => 3, "sco6" => 0, "sco7" => 1,
-            "sco8" => 2, "sco9" => 3, "sco10" => 0, "sco11" => 2,
-            "sco12" => 2, "sco13" => 3, "sco14" => 0, "sco15" => 0, "sco16" => 1,
+            "sco3" => 1, "sco4" => 2, "sco5" => 3, "sco6" => "", "sco7" => 1,
+            "sco8" => 2, "sco9" => 3, "sco10" => "", "sco11" => 2,
+            "sco12" => 2, "sco13" => 3, "sco14" => "", "sco15" => "", "sco16" => 1,
             "tex4" => "bobcat", "tex5" => "", "tex6" => "fishercat", "tex7" => "tiger",
             "tex8" => "leopard", "tex9" => "tremolo", "tex10" => "", "tex11" => "butt",
             "ready" => true
@@ -582,7 +603,7 @@ class Reviews_Tester {
         }
         $sv = SettingValues::make_request($this->u_chair, $sx);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "review_form");
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
     }
 
     function test_body() {
@@ -591,7 +612,6 @@ class Reviews_Tester {
         $user_mgbaker = $this->u_mgbaker;
         $user_diot = $conf->checked_user_by_email("christophe.diot@sophia.inria.fr"); // pc, red
         $user_pdruschel = $conf->checked_user_by_email("pdruschel@cs.rice.edu"); // pc
-        $user_mjh = $this->u_mjh;
 
         // saving a JSON review defaults to ready
         xassert_assign($user_chair, "paper,lead\n17,pdruschel\n");
@@ -628,10 +648,10 @@ class Reviews_Tester {
         xassert($tf->check_and_save($user_mgbaker, $paper17));
 
         $rrow17m = fresh_review($paper17, $user_mgbaker);
-        xassert_eq($rrow17m->fval("s01"), 2);
-        xassert_eq($rrow17m->fval("s02"), 1);
-        xassert_eqq($rrow17m->fval("t01"), "No summary\n");
-        xassert_eqq($rrow17m->fval("t02"), "No comments\n");
+        xassert_eq($rrow17m->fidval("s01"), 2);
+        xassert_eq($rrow17m->fidval("s02"), 1);
+        xassert_eqq($rrow17m->fidval("t01"), "No summary\n");
+        xassert_eqq($rrow17m->fidval("t02"), "No comments\n");
         xassert_eqq($rrow17m->reviewOrdinal, 1);
         xassert($rrow17m->reviewSubmitted > 0);
 
@@ -658,26 +678,26 @@ class Reviews_Tester {
         xassert($tf->check_and_save($user_diot, $paper18));
 
         $rrow18d = fresh_review($paper18, $user_diot);
-        $rd = new ReviewDiffInfo($paper18, $rrow18d);
-        $rd->add_field($conf->find_review_field("ovemer"), 3);
-        $rd->add_field($conf->find_review_field("papsum"), "There definitely is a summary in this position.");
+        $rrow18d->set_fval_prop($conf->find_review_field("ovemer"), 3, true);
+        $rrow18d->set_fval_prop($conf->find_review_field("papsum"), "There definitely is a summary in this position.", true);
+        $rd = $rrow18d->prop_diff();
         xassert_eqq(ReviewDiffInfo::unparse_patch($rd->make_patch(0)),
                     '{"s01":2,"t01":"No summary\\n"}');
         xassert_eqq(ReviewDiffInfo::unparse_patch($rd->make_patch(1)),
                     '{"s01":3,"t01":"There definitely is a summary in this position."}');
 
-        $rrow18d2 = clone $rrow18d;
-        xassert_eq($rrow18d2->fval("s01"), 2);
-        xassert_eq($rrow18d2->fval("s02"), 1);
-        xassert_eqq($rrow18d2->fval("t01"), "No summary\n");
+        $rrow18d2 = fresh_review($paper18, $user_diot);
+        xassert_eq($rrow18d2->fidval("s01"), 2);
+        xassert_eq($rrow18d2->fidval("s02"), 1);
+        xassert_eqq($rrow18d2->fidval("t01"), "No summary\n");
         ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch(1));
-        xassert_eq($rrow18d2->fval("s01"), 3);
-        xassert_eq($rrow18d2->fval("s02"), 1);
-        xassert_eqq($rrow18d2->fval("t01"), "There definitely is a summary in this position.");
+        xassert_eq($rrow18d2->fidval("s01"), 3);
+        xassert_eq($rrow18d2->fidval("s02"), 1);
+        xassert_eqq($rrow18d2->fidval("t01"), "There definitely is a summary in this position.");
         ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch(0));
-        xassert_eq($rrow18d2->fval("s01"), 2);
-        xassert_eq($rrow18d2->fval("s02"), 1);
-        xassert_eqq($rrow18d2->fval("t01"), "No summary\n");
+        xassert_eq($rrow18d2->fidval("s01"), 2);
+        xassert_eq($rrow18d2->fidval("s02"), 1);
+        xassert_eqq($rrow18d2->fidval("t01"), "No summary\n");
 
         $tf = new ReviewValues($conf->review_form());
         xassert($tf->parse_json(["papsum" =>
@@ -689,18 +709,18 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert($tf->check_and_save($user_diot, $paper18));
 
         $rrow18d = fresh_review($paper18, $user_diot);
-        $gettysburg = $rrow18d->fval("t01");
-        $gettysburg2 = str_replace("by the people", "near the people", $gettysburg);
-
-        $rd = new ReviewDiffInfo($paper18, $rrow18d);
-        $rd->add_field($conf->find_review_field("papsum"), $gettysburg2);
-
+        $gettysburg = $rrow18d->fidval("t01");
         $rrow18d2 = clone $rrow18d;
-        xassert_eqq($rrow18d2->fval("t01"), $gettysburg);
+
+        $gettysburg2 = str_replace("by the people", "near the people", $gettysburg);
+        $rrow18d->set_fval_prop($conf->find_review_field("papsum"), $gettysburg2, true);
+        $rd = $rrow18d->prop_diff();
+
+        xassert_eqq($rrow18d2->fidval("t01"), $gettysburg);
         ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch(1));
-        xassert_eqq($rrow18d2->fval("t01"), $gettysburg2);
+        xassert_eqq($rrow18d2->fidval("t01"), $gettysburg2);
         ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch(0));
-        xassert_eqq($rrow18d2->fval("t01"), $gettysburg);
+        xassert_eqq($rrow18d2->fidval("t01"), $gettysburg);
 
         // offline review parsing for UTF-8 review questions
         $sv = SettingValues::make_request($user_chair, [
@@ -727,7 +747,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert_eqq($tf->full_feedback_text(), "No changes to review #18A\n");
 
         $rrow = fresh_review($paper18, $user_diot);
-        xassert_eqq($rrow->fval("t04"), "This is the stuff I want to add for the authors’ response.\n");
+        xassert_eqq($rrow->fidval("t04"), "This is the stuff I want to add for the authors’ response.\n");
 
         $review18A2 = str_replace("This is the stuff", "That was the stuff",
             str_replace("authors’ response\n", "authors' response\n", $review18A));
@@ -736,7 +756,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert($tf->check_and_save($user_diot));
 
         $rrow = fresh_review($paper18, $user_diot);
-        xassert_eqq($rrow->fval("t04"), "That was the stuff I want to add for the authors’ response.\n");
+        xassert_eqq($rrow->fidval("t04"), "That was the stuff I want to add for the authors’ response.\n");
 
         $sv = SettingValues::make_request($user_chair, [
             "has_rf" => 1,
@@ -753,7 +773,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert($tf->check_and_save($user_diot));
 
         $rrow = fresh_review($paper18, $user_diot);
-        xassert_eqq($rrow->fval("t04"), "Whence the stuff I want to add for the authors’ response.\n");
+        xassert_eqq($rrow->fidval("t04"), "Whence the stuff I want to add for the authors’ response.\n");
 
         $review18A4 = file_get_contents(SiteLoader::find("test/review18A-4.txt"));
         $tf = ReviewValues::make_text($conf->review_form(), $review18A4, "review18A-4.txt");
@@ -761,28 +781,90 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert($tf->check_and_save($user_diot));
 
         $rrow = fresh_review($paper18, $user_diot);
-        xassert(str_ends_with($rrow->fval("t01"), "\n==+== Want to make sure this works\n"));
-        xassert_eqq($rrow->fval("t04"), "Whitherto the stuff I want to add for the authors’ response.\n");
+        xassert(str_ends_with($rrow->fidval("t01"), "\n==+== Want to make sure this works\n"));
+        xassert_eqq($rrow->fidval("t04"), "Whitherto the stuff I want to add for the authors’ response.\n");
+    }
+
+    function test_review_history() {
+        $conf = $this->conf;
+        $paper17 = $conf->checked_paper_by_id(17);
+        $rrow17a = fresh_review($paper17, $this->u_mgbaker);
+        xassert_eqq($rrow17a->fidval("s01"), 2);
+        xassert_eqq($rrow17a->fidval("s02"), 1);
+        xassert_eqq($rrow17a->fidval("t01"), "No summary\n");
+        xassert_eqq($rrow17a->fidval("t02"), "No comments\n");
+
+        $tf = new ReviewValues($conf->review_form());
+        xassert($tf->parse_json(["ovemer" => 3, "revexp" => 2, "papsum" => "This institution, perhaps one should say enterprise out of respect for which one says one need not change one's mind about a thing one has believed in, requiring public promises of one's intention to fulfill a private obligation;\n", "comaut" => "Now there are comments\n"]));
+        xassert($tf->check_and_save($this->u_mgbaker, $paper17));
+        $rrow17b = fresh_review($paper17, $this->u_mgbaker);
+        xassert_eqq($rrow17b->fidval("s01"), 3);
+        xassert_eqq($rrow17b->fidval("s02"), 2);
+        xassert_eqq($rrow17b->fidval("t01"), "This institution, perhaps one should say enterprise out of respect for which one says one need not change one's mind about a thing one has believed in, requiring public promises of one's intention to fulfill a private obligation;\n");
+        xassert_eqq($rrow17b->fidval("t02"), "Now there are comments\n");
+        xassert_eqq($rrow17a->fidval("s01"), 2); // no change to old version
+        xassert($rrow17b->reviewModified > $rrow17a->reviewModified);
+        xassert($rrow17b->reviewTime > $rrow17a->reviewTime);
+
+        $tf = new ReviewValues($conf->review_form());
+        xassert($tf->parse_json(["ovemer" => 4, "revexp" => 3, "papsum" => "This institution, perhaps one should say Starship Enterprise out of respect for which one says one need not change one's mind about a thing one has believed in, requiring public promises of one's intention to fulfill a private obligation;\n", "comaut" => "Now there are comments\n"]));
+        xassert($tf->check_and_save($this->u_mgbaker, $paper17));
+        $rrow17c = fresh_review($paper17, $this->u_mgbaker);
+        xassert_eqq($rrow17c->fidval("s01"), 4);
+        xassert_eqq($rrow17c->fidval("s02"), 3);
+        xassert_eqq($rrow17c->fidval("t01"), "This institution, perhaps one should say Starship Enterprise out of respect for which one says one need not change one's mind about a thing one has believed in, requiring public promises of one's intention to fulfill a private obligation;\n");
+        xassert_eqq($rrow17c->fidval("t02"), "Now there are comments\n");
+        xassert($rrow17c->reviewModified > $rrow17b->reviewModified);
+        xassert($rrow17c->reviewTime > $rrow17b->reviewTime);
+
+        //$x = $conf->fetch_first_object("select * from PaperReviewHistory where paperId=17 and reviewId=? and reviewNextTime=?", $rrow17c->reviewId, $rrow17c->reviewTime);
+        //error_log(json_encode($x));
+
+        $rrow17b2 = $rrow17c->version_at($rrow17c->reviewModified - 1);
+        xassert(!!$rrow17b2);
+        xassert_eqq($rrow17b->fidval("s01"), $rrow17b2->fidval("s01"));
+        xassert_eqq($rrow17b->fidval("s02"), $rrow17b2->fidval("s02"));
+        xassert_eqq($rrow17b->fidval("t01"), $rrow17b2->fidval("t01"));
+        xassert_eqq($rrow17b->fidval("t02"), $rrow17b2->fidval("t02"));
+
+        $rrow17a2 = $rrow17c->version_at($rrow17b->reviewModified - 1);
+        xassert(!!$rrow17a2);
+        xassert_eqq($rrow17a->fidval("s01"), $rrow17a2->fidval("s01"));
+        xassert_eqq($rrow17a->fidval("s02"), $rrow17a2->fidval("s02"));
+        xassert_eqq($rrow17a->fidval("t01"), $rrow17a2->fidval("t01"));
+        xassert_eqq($rrow17a->fidval("t02"), $rrow17a2->fidval("t02"));
+
+        // restore original scores
+        $tf = new ReviewValues($conf->review_form());
+        xassert($tf->parse_json(["ovemer" => 2, "revexp" => 1]));
+        xassert($tf->check_and_save($this->u_mgbaker, $paper17));
+    }
+
+    function test_review_visibility() {
+        $conf = $this->conf;
+        $paper17 = $conf->checked_paper_by_id(17);
+        $rrow17m = fresh_review($paper17, $this->u_mgbaker);
 
         // check some review visibility policies
         $user_external = Contact::make_keyed($conf, ["email" => "external@_.com", "name" => "External Reviewer"])->store();
         assert(!!$user_external);
-        $user_mgbaker->assign_review(17, $user_external->contactId, REVIEW_EXTERNAL,
+        $this->u_mgbaker->assign_review(17, $user_external->contactId, REVIEW_EXTERNAL,
             ["round_number" => $conf->round_number("R2", false)]);
         xassert(!$user_external->can_view_review($paper17, $rrow17m));
         xassert(!$user_external->can_view_review_identity($paper17, $rrow17m));
-        xassert(!$user_mjh->can_view_review($paper17, $rrow17m));
-        $conf->save_setting("extrev_view", 0);
+        xassert(!$this->u_mjh->can_view_review($paper17, $rrow17m));
+        $conf->save_setting("extrev_seerev", null);
+        $conf->save_setting("extrev_seerevid", null);
         save_review(17, $user_external, [
             "ovemer" => 2, "revexp" => 1, "papsum" => "Hi", "comaut" => "Bye", "ready" => true
         ]);
         MailChecker::check_db("test06-17external");
         xassert(!$user_external->can_view_review($paper17, $rrow17m));
         xassert(!$user_external->can_view_review_identity($paper17, $rrow17m));
-        $conf->save_setting("extrev_view", 1);
+        $conf->save_setting("extrev_seerev", 1);
         xassert($user_external->can_view_review($paper17, $rrow17m));
         xassert(!$user_external->can_view_review_identity($paper17, $rrow17m));
-        $conf->save_setting("extrev_view", 2);
+        $conf->save_setting("extrev_seerevid", 1);
         xassert($user_external->can_view_review($paper17, $rrow17m));
         xassert($user_external->can_view_review_identity($paper17, $rrow17m));
 
@@ -798,18 +880,18 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert_eqq($rrow17x->reviewRound, $conf->round_number("R2", false));
         Contact::update_rights();
 
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17h));
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17h));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17x));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17h));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17x));
         xassert($user_external->can_view_review($paper17, $rrow17m));
         xassert($user_external->can_view_review($paper17, $rrow17h));
         xassert($user_external->can_view_review($paper17, $rrow17x));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17h));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17h));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17x));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17h));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17x));
@@ -830,7 +912,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert_eqq($conf->assignment_round(true), 0);
         xassert_eqq($conf->setting_data("rev_roundtag"), null);
         xassert_eqq($conf->setting_data("extrev_roundtag"), null);
-        $sv = SettingValues::make_request($user_chair, [
+        $sv = SettingValues::make_request($this->u_chair, [
             "review_default_round" => "R1"
         ]);
         xassert($sv->execute());
@@ -838,7 +920,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert_eqq($conf->assignment_round(true), 1);
         xassert_eqq($conf->setting_data("rev_roundtag"), "R1");
         xassert_eqq($conf->setting_data("extrev_roundtag"), null);
-        $sv = SettingValues::make_request($user_chair, [
+        $sv = SettingValues::make_request($this->u_chair, [
             "review_default_round" => "R3",
             "review_default_external_round" => "unnamed"
         ]);
@@ -848,7 +930,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert_eqq($conf->setting_data("tag_rounds"), "R1 R2 R3 R5");
         xassert_eqq($conf->setting_data("rev_roundtag"), "R3");
         xassert_eqq($conf->setting_data("extrev_roundtag"), "unnamed");
-        $sv = SettingValues::make_request($user_chair, [
+        $sv = SettingValues::make_request($this->u_chair, [
             "review_default_external_round" => "default"
         ]);
         xassert($sv->execute());
@@ -856,7 +938,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert_eqq($conf->assignment_round(true), 3);
         xassert_eqq($conf->setting_data("rev_roundtag"), "R3");
         xassert_eqq($conf->setting_data("extrev_roundtag"), null);
-        $sv = SettingValues::make_request($user_chair, [
+        $sv = SettingValues::make_request($this->u_chair, [
             "review_default_round" => "unnamed"
         ]);
         xassert($sv->execute());
@@ -865,118 +947,261 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert_eqq($conf->setting_data("rev_roundtag"), null);
         xassert_eqq($conf->setting_data("extrev_roundtag"), null);
 
-        $this->save_round_settings(["R1" => ["extrev_view" => 0]]);
+        $this->save_round_settings(["R1" => ["extrev_seerev" => 0, "extrev_seerevid" => 0]]);
         Contact::update_rights();
 
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17h));
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17h));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17x));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17h));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17x));
         xassert($user_external->can_view_review($paper17, $rrow17m));
         xassert(!$user_external->can_view_review($paper17, $rrow17h));
         xassert($user_external->can_view_review($paper17, $rrow17x));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17h));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17h));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17x));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17h));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17x));
         xassert($user_external->can_view_review_identity($paper17, $rrow17m));
         xassert(!$user_external->can_view_review_identity($paper17, $rrow17h));
         xassert($user_external->can_view_review_identity($paper17, $rrow17x));
-        assert_search_papers($user_chair, "re:mgbaker", "1 13 17");
+        assert_search_papers($this->u_chair, "re:mgbaker", "1 13 17");
         assert_search_papers($this->u_lixia, "re:mgbaker", "1 13 17");
 
         // Extrev cannot view R1; PC cannot view R2
-        $this->save_round_settings(["R1" => ["extrev_view" => 0], "R2" => ["pc_seeallrev" => -1]]);
+        $this->save_round_settings(["R1" => ["extrev_seerev" => 0, "extrev_seerevid" => 0], "R2" => ["pc_seeallrev" => -1]]);
         Contact::update_rights();
 
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17h));
-        xassert(!$user_mgbaker->can_view_review($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17h));
+        xassert(!$this->u_mgbaker->can_view_review($paper17, $rrow17x));
         xassert(!$this->u_lixia->can_view_review($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17h));
         xassert(!$this->u_lixia->can_view_review($paper17, $rrow17x));
         xassert($user_external->can_view_review($paper17, $rrow17m));
         xassert(!$user_external->can_view_review($paper17, $rrow17h));
         xassert($user_external->can_view_review($paper17, $rrow17x));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17h));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17h));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17x));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17h));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17x));
         xassert($user_external->can_view_review_identity($paper17, $rrow17m));
         xassert(!$user_external->can_view_review_identity($paper17, $rrow17h));
         xassert($user_external->can_view_review_identity($paper17, $rrow17x));
-        assert_search_papers($user_chair, "re:mgbaker", "1 13 17");
+        assert_search_papers($this->u_chair, "re:mgbaker", "1 13 17");
         assert_search_papers($this->u_lixia, "re:mgbaker", "1 13 17");
 
         // Extrev cannot view R1; PC cannot view R2 identity
-        $this->save_round_settings(["R1" => ["extrev_view" => 0], "R2" => ["pc_seeblindrev" => -1]]);
+        $this->save_round_settings(["R1" => ["extrev_seerev" => 0, "extrev_seerevid" => 0], "R2" => ["pc_seeblindrev" => -1]]);
         Contact::update_rights();
 
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17h));
-        xassert($user_mgbaker->can_view_review($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17h));
+        xassert($this->u_mgbaker->can_view_review($paper17, $rrow17x));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17h));
         xassert($this->u_lixia->can_view_review($paper17, $rrow17x));
         xassert($user_external->can_view_review($paper17, $rrow17m));
         xassert(!$user_external->can_view_review($paper17, $rrow17h));
         xassert($user_external->can_view_review($paper17, $rrow17x));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17m));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17h));
-        xassert($user_mgbaker->can_view_review_identity($paper17, $rrow17x));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17m));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17h));
+        xassert($this->u_mgbaker->can_view_review_identity($paper17, $rrow17x));
         xassert(!$this->u_lixia->can_view_review_identity($paper17, $rrow17m));
         xassert($this->u_lixia->can_view_review_identity($paper17, $rrow17h));
         xassert(!$this->u_lixia->can_view_review_identity($paper17, $rrow17x));
         xassert($user_external->can_view_review_identity($paper17, $rrow17m));
         xassert(!$user_external->can_view_review_identity($paper17, $rrow17h));
         xassert($user_external->can_view_review_identity($paper17, $rrow17x));
-        assert_search_papers($user_chair, "re:mgbaker", "1 13 17");
+        assert_search_papers($this->u_chair, "re:mgbaker", "1 13 17");
         assert_search_papers($this->u_lixia, "re:mgbaker", "1");
+
+        $this->conf->save_refresh_setting("round_settings", null);
+        Contact::update_rights();
+    }
+
+    function print_scores() {
+        $result = $this->conf->qe("select paperId, group_concat(s01), group_concat(s02) from PaperReview where reviewSubmitted>0 group by paperId");
+        while (($row = $result->fetch_row())) {
+            fwrite(STDOUT, sprintf("%-5s %-12s %s\n", ...$row));
+        }
+        Dbl::free($result);
+    }
+
+    function test_search_ranges() {
+        $user_external = $this->conf->checked_user_by_email("external@_.com");
+        $user_pdruschel = $this->conf->checked_user_by_email("pdruschel@cs.rice.edu");
+        $user_danzig = $this->conf->checked_user_by_email("peter.danzig@usc.edu");
+
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_rf" => 1,
+            "rf/1/id" => "s01", "rf/1/values_text" => "1. Reject\n2. Weak reject\n3. Weak accept\n4. Accept\n5. Strong accept\n", "rf/1/required" => 0
+        ]);
+        xassert($sv->execute());
+        xassert_eqq($this->conf->checked_review_field("s01")->required, false);
 
         save_review(17, $user_external, [
             "ovemer" => 1
         ]);
-        assert_search_papers($user_chair, "17 ovemer:2<=1", "");
-        assert_search_papers($user_chair, "17 ovemer:=1<=1", "17");
-        assert_search_papers($user_chair, "17 ovemer=1<=1", "17");
+        assert_search_papers($this->u_chair, "17 ovemer:2<=1", "");
+        assert_search_papers($this->u_chair, "17 ovemer:=1<=1", "17");
+        assert_search_papers($this->u_chair, "17 ovemer=1<=1", "17");
 
         save_review(17, $user_pdruschel, [
             "ready" => true, "ovemer" => 1, "revexp" => 1
         ]);
-        assert_search_papers($user_chair, "17 ovemer:2<=1", "17");
-        assert_search_papers($user_chair, "17 ovemer:=2<=1", "17");
-        assert_search_papers($user_chair, "17 ovemer:1<=1", "17");
-        assert_search_papers($user_chair, "17 ovemer:=1<=1", "");
-        assert_search_papers($user_chair, "17 ovemer=1<=1", "");
+        assert_search_papers($this->u_chair, "17 ovemer:2<=1", "17");
+        assert_search_papers($this->u_chair, "17 ovemer:=2<=1", "17");
+        assert_search_papers($this->u_chair, "17 ovemer:1<=1", "17");
+        assert_search_papers($this->u_chair, "17 ovemer:=1<=1", "");
+        assert_search_papers($this->u_chair, "17 ovemer=1<=1", "");
 
-        assert_search_papers($user_chair, "ovemer:1..2", "17 18");
-        assert_search_papers($user_chair, "ovemer:1..3", "1 17 18");
-        assert_search_papers($user_chair, "ovemer:1–2", "17");
-        assert_search_papers($user_chair, "ovemer:1-3", "");
-        assert_search_papers($user_chair, "ovemer:2..1", "17 18");
-        assert_search_papers($user_chair, "ovemer:3..1", "1 17 18");
+        save_review(19, $this->u_lixia, ["ready" => true, "ovemer" => 2, "revexp" => 2]);
+        save_review(19, $user_danzig, ["ready" => true, "ovemer" => 3, "revexp" => 2]);
+        save_review(19, $user_pdruschel, ["ready" => true, "ovemer" => 4, "revexp" => 3]);
+        save_review(20, $this->u_lixia, ["ready" => true, "ovemer" => 1, "revexp" => 1]);
+        save_review(20, $user_danzig, ["ready" => true, "ovemer" => 4, "revexp" => 1]);
+        save_review(20, $user_pdruschel, ["ready" => true, "ovemer" => 5, "revexp" => 1]);
+        save_review(21, $this->u_lixia, ["ready" => true, "ovemer" => 0, "revexp" => 3]);
+        save_review(21, $user_danzig, ["ready" => true, "ovemer" => 4, "revexp" => 3]);
+        save_review(21, $user_pdruschel, ["ready" => true, "ovemer" => 5, "revexp" => 3]);
 
+        // Submitted reviews:
+        // pid   ovemer       revexp
+        // 1     3            1
+        // 17    2,2,1,1      1,1,1,1
+        // 18    2            1
+        // 19    2,3,4        2,2,3
+        // 20    1,4,5        1,1,1
+        // 21    none,4,5     3,3,3
+
+        assert_search_papers($this->u_chair, "ovemer:1", "17 20");
+        assert_search_papers($this->u_chair, "ovemer:2", "17 18 19");
+        assert_search_papers($this->u_chair, "ovemer:3", "1 19");
+        assert_search_papers($this->u_chair, "ovemer:4", "19 20 21");
+        assert_search_papers($this->u_chair, "ovemer:5", "20 21");
+        assert_search_papers($this->u_chair, "ovemer:none", "21");
+
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:none:1", "1 18 19 21");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:=0:1", "1 18 19 21");
+        assert_search_papers($this->u_chair, "ovemer:>1:1", "17");
+        assert_search_papers($this->u_chair, "ovemer:>2:1", "");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:<2:1", "1 18 19 20 21");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:≤2:1", "1 17 18 19 20 21");
+
+        assert_search_papers($this->u_chair, "ovemer:any:1..2", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:all:1..2", "17 18");
+        assert_search_papers($this->u_chair, "ovemer:1..2", "17 18");
+        assert_search_papers($this->u_chair, "ovemer:span:1..2", "17");
+        assert_search_papers($this->u_chair, "ovemer:any:1…2", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any:1-2", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any:1—2", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:none:2-3", "20 21");
+
+        assert_search_papers($this->u_chair, "ovemer:any:1-5", "1 17 18 19 20 21");
+        assert_search_papers($this->u_chair, "ovemer:all:1-5", "1 17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:1-5", "1 17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:span:1-5", "20");
+
+        assert_search_papers($this->u_chair, "ovemer:any:1..3", "1 17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any:1-3", "1 17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:all:1..3", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:all:1—3", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:1—3", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:span:1..3", "");
+        assert_search_papers($this->u_chair, "ovemer:any:1–2", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:all:1-2", "17 18");
+        assert_search_papers($this->u_chair, "ovemer:span:1–2", "17");
+
+        $this->conf->set_opt("allowObsoleteScoreSearch", 1);
+        assert_search_papers($this->u_chair, "ovemer:1..2", "17 18");
+        assert_search_papers($this->u_chair, "ovemer:1..3", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:1-3", "");
+        $this->conf->set_opt("allowObsoleteScoreSearch", null);
+    }
+
+    function test_search_alpha_ranges() {
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_rf" => 1,
+            "rf/1/id" => "s01", "rf/1/values_text" => "E. Reject\nD. Weak reject\nC. Weak accept\nB. Accept\nA. Strong accept\n"
+        ]);
+        xassert($sv->execute());
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
+
+        assert_search_papers($this->u_chair, "ovemer:E", "17 20");
+        assert_search_papers($this->u_chair, "ovemer:D", "17 18 19");
+        assert_search_papers($this->u_chair, "ovemer:C", "1 19");
+        assert_search_papers($this->u_chair, "ovemer:B", "19 20 21");
+        assert_search_papers($this->u_chair, "ovemer:A", "20 21");
+        assert_search_papers($this->u_chair, "ovemer:none", "21");
+
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:none:E", "1 18 19 21");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:=0:E", "1 18 19 21");
+        //assert_search_papers($this->u_chair, "ovemer:>1:1", "17");
+        //assert_search_papers($this->u_chair, "ovemer:>2:1", "");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:<2:E", "1 18 19 20 21");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:≤2:E", "1 17 18 19 20 21");
+
+        assert_search_papers($this->u_chair, "ovemer:any:DE", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:all:DE", "17 18");
+        assert_search_papers($this->u_chair, "ovemer:span:DE", "17");
+        assert_search_papers($this->u_chair, "ovemer:any:D..E", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any:D…E", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any:D-E", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any:D-E", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any ovemer:none:C-D", "20 21");
+
+        assert_search_papers($this->u_chair, "ovemer:any:A-E", "1 17 18 19 20 21");
+        assert_search_papers($this->u_chair, "ovemer:all:A-E", "1 17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:span:A-E", "20");
+
+        assert_search_papers($this->u_chair, "ovemer:any:C..E", "1 17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:any:C-E", "1 17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:all:C..E", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:C..E", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:all:C—E", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:C—E", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:span:C..E", "");
+        assert_search_papers($this->u_chair, "ovemer:any:D–E", "17 18 19 20");
+        assert_search_papers($this->u_chair, "ovemer:all:D-E", "17 18");
+        assert_search_papers($this->u_chair, "ovemer:span:D–E", "17");
+
+        $this->conf->set_opt("allowObsoleteScoreSearch", 1);
+        assert_search_papers($this->u_chair, "ovemer:D..E", "17 18");
+        assert_search_papers($this->u_chair, "ovemer:C..E", "1 17 18");
+        assert_search_papers($this->u_chair, "ovemer:C-E", "");
+        $this->conf->set_opt("allowObsoleteScoreSearch", null);
+
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_rf" => 1,
+            "rf/1/id" => "s01", "rf/1/values_text" => "1. Reject\n2. Weak reject\n3. Weak accept\n4. Accept\n5. Strong accept\n"
+        ]);
+        xassert($sv->execute());
+        xassert_eqq($sv->changed_keys(), ["review_form"]);
+    }
+
+    function test_new_external_reviewer() {
         // new external reviewer does not get combined email
-        $conf->save_refresh_setting("round_settings", null);
-        $conf->save_refresh_setting("extrev_view", 1);
-        $conf->save_refresh_setting("pcrev_editdelegate", 2);
+        $this->conf->save_refresh_setting("extrev_seerev", 1);
+        $this->conf->save_refresh_setting("extrev_seerevid", null);
+        $this->conf->save_refresh_setting("pcrev_editdelegate", 2);
         Contact::update_rights();
         MailChecker::clear();
 
         $xqreq = new Qrequest("POST", ["email" => "external2@_.com", "name" => "Jo March", "affiliation" => "Concord"]);
+        $paper17 = $this->conf->checked_paper_by_id(17);
         $result = RequestReview_API::requestreview($this->u_lixia, $xqreq, $paper17);
         MailChecker::check_db("test06-external2-request17");
         xassert($result instanceof JsonResult);
         xassert($result->content["ok"]);
-        $user_external2 = $conf->checked_user_by_email("external2@_.com");
-        $conf->invalidate_user($user_external2);
-        $user_external2 = $conf->user_by_email("external2@_.com"); // ensure cached user
+        $user_external2 = $this->conf->checked_user_by_email("external2@_.com");
+        $this->conf->invalidate_user($user_external2);
+        $user_external2 = $this->conf->user_by_email("external2@_.com"); // ensure cached user
         assert($user_external2 !== null);
         $paper17->load_reviews(true);
 
@@ -987,7 +1212,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert(str_starts_with($tok->salt, "hcra"));
 
         // check that review accept capability works
-        $emptyuser = Contact::make($conf);
+        $emptyuser = Contact::make($this->conf);
         assert(!$emptyuser->can_view_paper($paper17));
         $emptyuser->apply_capability_text($tok->salt); // had an infinite loop here
         assert(!!$emptyuser->can_view_paper($paper17));
@@ -995,8 +1220,8 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
 
         // check clickthrough
         assert($emptyuser->can_clickthrough("review", $paper17));
-        $conf->set_opt("clickthrough_review", 1);
-        $conf->fmt()->add_override("clickthrough_review", "fart");
+        $this->conf->set_opt("clickthrough_review", 1);
+        $this->conf->fmt()->add_override("clickthrough_review", "fart");
         assert(!$emptyuser->can_clickthrough("review", $paper17));
         assert(!$user_external2->can_clickthrough("review", $paper17));
         xassert_eqq($user_external2->reviewer_capability_user(17), null);
@@ -1005,7 +1230,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         assert(!$user_external2->can_clickthrough("review", $paper17));
 
         $user_external2->merge_and_save_data(["clickthrough" => ["de1027d6806d42584748f76733d55a9ca1c41f3a" => true]]); // sha1("fart")
-        $conf->invalidate_user($user_external2);
+        $this->conf->invalidate_user($user_external2);
 
         assert($user_external2->can_clickthrough("review", $paper17));
         $user_external2->clear_capabilities();
@@ -1015,7 +1240,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         assert(!$emptyuser->can_clickthrough("review", $paper17));
 
         // no longer want clickthrough
-        $conf->set_opt("clickthrough_review", null);
+        $this->conf->set_opt("clickthrough_review", null);
 
         // save review, check mail
         save_review(17, $user_external2, [
@@ -1081,18 +1306,6 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert(!$this->u_mjh->can_view_review($paper17, $rrow17m));
         $this->conf->save_refresh_setting("au_seerev", 2);
         xassert($this->u_mjh->can_view_review($paper17, $rrow17m));
-        xassert_assign_fail($this->u_mgbaker, "paper,tag\n17,perm:author-read-review\n");
-        xassert_assign_fail($this->u_mjh, "paper,tag\n17,perm:author-read-review\n");
-        xassert_assign($this->u_chair, "paper,tag\n17,perm:author-read-review#-1\n");
-        $paper17 = $this->conf->checked_paper_by_id(17);
-        xassert(!$this->u_mjh->can_view_review($paper17, $rrow17m));
-        $this->conf->save_refresh_setting("au_seerev", null);
-        xassert_assign($this->u_chair, "paper,tag\n17,perm:author-read-review#1\n");
-        $paper17 = $this->conf->checked_paper_by_id(17);
-        xassert($this->u_mjh->can_view_review($paper17, $rrow17m));
-        xassert_assign($this->u_chair, "paper,tag\n17,perm:author-read-review#clear\n");
-        $paper17 = $this->conf->checked_paper_by_id(17);
-        xassert(!$this->u_mjh->can_view_review($paper17, $rrow17m));
     }
 
     function test_submission_fields() {
@@ -1108,7 +1321,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
             "sf/1/type" => "numeric"
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "options");
+        xassert_eqq($sv->changed_keys(), ["options"]);
         assert_search_papers($this->u_chair, "has:fudge", "1 2 3 4 5");
         assert_search_papers($this->u_mgbaker, "has:fudge", "1 2 3 4 5");
 
@@ -1136,7 +1349,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
             "sf/2/order" => 2
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "options");
+        xassert_eqq($sv->changed_keys(), ["options"]);
         assert_search_papers($this->u_mgbaker, "has:fudge", "");
 
         // new field
@@ -1148,7 +1361,7 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
             "sf/1/type" => "numeric"
         ]);
         xassert($sv->execute());
-        xassert_eqq(join(" ", $sv->updated_fields()), "options");
+        xassert_eqq($sv->changed_keys(), ["options"]);
         assert_search_papers($this->u_mgbaker, "has:brownies", "");
 
         // `order` is obeyed
@@ -1179,5 +1392,42 @@ But, in a larger sense, we can not dedicate -- we can not consecrate -- we can n
         xassert(!$sv->execute());
         xassert_str_contains($sv->full_feedback_text(), "Entry required");
         xassert($sv->has_error_at("sf/1/name"));
+    }
+
+    function test_review_symbols() {
+        $FNUM = Score_ReviewField::FLAG_NUMERIC;
+        $FLET = Score_ReviewField::FLAG_ALPHA;
+        $FCHR = Score_ReviewField::FLAG_SINGLE_CHAR;
+        $FDEF = Score_ReviewField::FLAG_DEFAULT_SYMBOLS;
+        xassert_eqq(Score_ReviewField::analyze_symbols([], false), $FNUM|$FDEF);
+        xassert_eqq(Score_ReviewField::analyze_symbols([1, 2, 3], false), $FNUM|$FDEF);
+        xassert_eqq(Score_ReviewField::analyze_symbols([1, 2, 3], true), 0);
+        xassert_eqq(Score_ReviewField::analyze_symbols(["←", "B"], true), $FCHR);
+        xassert_eqq(Score_ReviewField::analyze_symbols(["C", "B", "A"], true), $FLET|$FCHR|$FDEF);
+        xassert_eqq(Score_ReviewField::analyze_symbols(["C", "B", "A", "@"], true), $FCHR);
+        xassert_eqq(Score_ReviewField::analyze_symbols(["C", "B", "A"], false), $FLET|$FCHR);
+    }
+
+    function test_checkboxes_review_field() {
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(0), []);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(1), [1]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(2), [2]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(3), [1, 2]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(4), [3]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(5), [1, 3]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(6), [2, 3]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(7), [1, 2, 3]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(8), [4]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(16), [5]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(32), [6]);
+        xassert_eqq(Checkboxes_ReviewField::unpack_value(64), [7]);
+    }
+
+    function test_clean_name() {
+        xassert_eqq(ReviewField::clean_name("Fudge (shown only to administrator)"), "Fudge");
+        xassert_eqq(ReviewField::clean_name("Fudge (shown only to chair)"), "Fudge");
+        xassert_eqq(ReviewField::clean_name("Fudge (shown only to chairs)"), "Fudge");
+        xassert_eqq(ReviewField::clean_name("Fudge (secret)"), "Fudge");
+        xassert_eqq(ReviewField::clean_name("Fudge (shown only to Emmanuel Macron)"), "Fudge (shown only to Emmanuel Macron)");
     }
 }

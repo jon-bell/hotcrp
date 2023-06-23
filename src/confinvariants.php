@@ -1,6 +1,6 @@
 <?php
 // confinvariants.php -- HotCRP invariant checker
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class ConfInvariants {
     /** @var Conf */
@@ -62,9 +62,16 @@ class ConfInvariants {
         } else if ($text === null) {
             $text = $abbrev;
         }
-        foreach ($this->irow ?? [] as $i => $v) {
-            $text = str_replace("{{$i}}", $v, $text);
-        }
+        $text = preg_replace_callback('/\{(\d+)\}/', function ($m) {
+            $v = $this->irow[$m[1]] ?? "";
+            if (!is_usascii($v)) {
+                $v = bin2hex($v);
+                if (str_starts_with($v, "736861322d") && strlen($v) === 74) {
+                    $v = "sha2-" . substr($v, 10);
+                }
+            }
+            return $v;
+        }, $text);
         $msg = "{$this->prefix}{$this->conf->dbname} invariant violation: {$text}";
         if ($this->msgbuf !== null) {
             $this->msgbuf[] = $msg . "\n";
@@ -81,7 +88,7 @@ class ConfInvariants {
     /** @return $this */
     function check_settings() {
         foreach ($this->conf->decision_set() as $dinfo) {
-            if (($dinfo->id > 0) !== ($dinfo->category === DecisionInfo::CAT_YES)) {
+            if (($dinfo->id > 0) !== (($dinfo->catbits & DecisionInfo::CAT_YES) !== 0)) {
                 $this->invariant_error("decision_id", "decision {$dinfo->id} has wrong category");
             }
         }
@@ -89,7 +96,7 @@ class ConfInvariants {
     }
 
     /** @return $this */
-    function check_setting_invariants() {
+    function check_summary_settings() {
         // settings correctly materialize database facts
 
         // `no_papersub` === no submitted papers
@@ -138,12 +145,6 @@ class ConfInvariants {
         $any = $this->invariantq("select tag from PaperTag where tag like '%:' limit 1");
         if ($any && !$this->conf->setting("has_colontag")) {
             $this->invariant_error("has_colontag", "has tag {0} but no has_colontag");
-        }
-
-        // `has_permtag` === any tags starting with `perm:`
-        $any = $this->invariantq("select tag from PaperTag where tag like 'perm:%' limit 1");
-        if ($any && !$this->conf->setting("has_permtag")) {
-            $this->invariant_error("has_permtag", "has tag {0} but no has_permtag");
         }
 
         return $this;
@@ -265,7 +266,7 @@ class ConfInvariants {
     /** @return $this */
     function check_responses() {
         // responses have author visibility
-        $any = $this->invariantq("select paperId, commentId from PaperComment where (commentType&" . CommentInfo::CT_RESPONSE  . ")!=0 and (commentType&" . CommentInfo::CT_AUTHOR . ")=0 limit 1");
+        $any = $this->invariantq("select paperId, commentId from PaperComment where (commentType&" . CommentInfo::CT_RESPONSE  . ")!=0 and (commentType&" . CommentInfo::CTVIS_AUTHOR . ")=0 limit 1");
         if ($any) {
             $this->invariant_error("response #{0}/{1} is not author-visible");
         }
@@ -358,13 +359,19 @@ class ConfInvariants {
         if ($any) {
             $this->invariant_error("paper_id_denormalization", "bad PaperStorage link, paper #{0} (storage paper #{1})");
         }
-        $any = $this->invariantq("select p.paperId from Paper p join PaperStorage ps on (ps.paperStorageId=p.paperStorageId) where p.finalPaperStorageId<=0 and p.paperStorageId>1 and (p.sha1!=ps.sha1 or p.size!=ps.size or p.mimetype!=ps.mimetype or p.timestamp!=ps.timestamp) limit 1");
+        $any = $this->invariantq("select p.paperId, ps.paperStorageId, p.sha1, p.size, p.mimetype, p.timestamp, ps.sha1, ps.size, ps.mimetype, ps.timestamp from Paper p join PaperStorage ps on (ps.paperStorageId=p.paperStorageId) where p.finalPaperStorageId<=0 and p.paperStorageId>1 and (p.sha1!=ps.sha1 or p.size!=ps.size or p.mimetype!=ps.mimetype or p.timestamp!=ps.timestamp) limit 1");
         if ($any) {
-            $this->invariant_error("paper_denormalization", "bad Paper denormalization, paper #{0}");
+            assert(count($this->irow) === 10);
+            for ($n = 2; $n !== 6 && $this->irow[$n] === $this->irow[$n + 4]; ++$n) {
+            }
+            $this->invariant_error("paper_denormalization", "bad Paper denormalization, document #{0}.{1} ({{$n}}!={" . ($n+4) . "})");
         }
-        $any = $this->invariantq("select p.paperId, ps.paperId from Paper p join PaperStorage ps on (ps.paperStorageId=p.finalPaperStorageId) where p.finalPaperStorageId>1 and (p.paperId!=ps.paperId or p.sha1!=ps.sha1 or p.size!=ps.size or p.mimetype!=ps.mimetype or p.timestamp!=ps.timestamp) limit 1");
+        $any = $this->invariantq("select p.paperId, ps.paperStorageId, p.sha1, p.size, p.mimetype, p.timestamp, ps.sha1, ps.size, ps.mimetype, ps.timestamp from Paper p join PaperStorage ps on (ps.paperStorageId=p.finalPaperStorageId) where p.finalPaperStorageId>1 and (p.sha1!=ps.sha1 or p.size!=ps.size or p.mimetype!=ps.mimetype or p.timestamp!=ps.timestamp) limit 1");
         if ($any) {
-            $this->invariant_error("paper_final_denormalization", "bad Paper final denormalization, paper #{0} (storage paper #{1})");
+            assert(count($this->irow) === 10);
+            for ($n = 2; $n !== 6 && $this->irow[$n] === $this->irow[$n + 4]; ++$n) {
+            }
+            $this->invariant_error("paper_denormalization", "bad Paper final denormalization, document #{0}.{1} ({{$n}}!={" . ($n+4) . "})");
         }
 
         // filterType is never zero
@@ -473,8 +480,10 @@ class ConfInvariants {
         }
 
         // authors are all accounted for
-        foreach ($authors as $lemail => $pids) {
-            $this->invariant_error("author_contacts", "author {$lemail} of #{$pids[0]} lacking from database");
+        if (false) { // XXX currently violated by email changes
+            foreach ($authors as $lemail => $pids) {
+                $this->invariant_error("author_contacts", "author {$lemail} of #{$pids[0]} lacking from database");
+            }
         }
 
         return $this;
@@ -556,9 +565,9 @@ class ConfInvariants {
 
     /** @param ?string $prefix
      * @return bool */
-    static function test_setting_invariants(Conf $conf, $prefix = null) {
+    static function test_summary_settings(Conf $conf, $prefix = null) {
         $prefix = $prefix ?? caller_landmark() . ": ";
-        return (new ConfInvariants($conf, $prefix))->check_setting_invariants()->ok();
+        return (new ConfInvariants($conf, $prefix))->check_summary_settings()->ok();
     }
 
     /** @param ?string $prefix

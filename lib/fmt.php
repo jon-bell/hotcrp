@@ -1,17 +1,32 @@
 <?php
 // fmt.php -- HotCRP helper functions for message formatting i18n
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class FmtArg {
     /** @var int|string */
     public $name;
     /** @var mixed */
     public $value;
+    /** @var ?int */
+    public $format;
 
-    /** @param int|string $name */
-    function __construct($name, $value) {
+    /** @param int|string $name
+     * @param ?int $format */
+    function __construct($name, $value, $format = null) {
         $this->name = $name;
         $this->value = $value;
+        $this->format = $format;
+    }
+
+    /** @param ?int $format
+     * @return string */
+    function resolve_as($format) {
+        if ($format !== null
+            && $this->format !== null
+            && $format !== $this->format) {
+            return Ftext::convert($this->value, $this->format, $format);
+        }
+        return $this->value;
     }
 }
 
@@ -148,6 +163,26 @@ class FmtItem {
             }
         }
         return $nreq;
+    }
+}
+
+class FmtContext {
+    /** @var list */
+    public $args;
+    /** @var int */
+    public $argnum = 0;
+    /** @var ?string */
+    public $context;
+    /** @var ?FmtItem */
+    public $im;
+    /** @var ?int */
+    public $format;
+
+    function __construct($s, $args, $context, $im) {
+        $this->args = $args;
+        $this->context = $context;
+        $this->im = $im;
+        $this->format = str_starts_with($s, "<") ? Ftext::format($s) : null;
     }
 }
 
@@ -423,27 +458,24 @@ class Fmt {
 
     /** @param string $s
      * @param int $pos
-     * @param list<mixed> $args
-     * @param int &$argnum
-     * @param ?string $context
-     * @param ?FmtItem $im
+     * @param FmtContext $fctx
      * @return array{int,?string} */
-    private function expand_percent($s, $pos, $args, &$argnum, $context, $im) {
+    private function expand_percent($s, $pos, $fctx) {
         if (preg_match('/%((?!\d)\w+)%/A', $s, $m, 0, $pos)) {
-            if (($fa = self::find_arg($args, strtolower($m[1])))) {
-                return [$pos + strlen($m[0]), $fa->value];
-            } else if (($imt = $this->find($context, strtolower($m[1]), [$m[1]], null))
+            if (($fa = self::find_arg($fctx->args, strtolower($m[1])))) {
+                return [$pos + strlen($m[0]), $fa->resolve_as($fctx->format)];
+            } else if (($imt = $this->find($fctx->context, strtolower($m[1]), [$m[1]], null))
                        && $imt->template) {
-                return [$pos + strlen($m[0]), $this->expand($imt->otext, $args, null, null)];
+                return [$pos + strlen($m[0]), $this->expand($imt->otext, $fctx->args, null, null)];
             }
         }
 
-        if (!($im && $im->no_conversions)
-            && count($args) > 0
+        if (!($fctx->im && $fctx->im->no_conversions)
+            && count($fctx->args) > 0
             && preg_match('/%(?:(\d+)(\[[^\[\]\$]*\]|)\$|)(#[AON]?|)(\d*(?:\.\d+|))([deEifgosxXHU])/A', $s, $m, 0, $pos)) {
-            $argi = $m[1] ? +$m[1] : ++$argnum;
-            if (($fa = self::find_arg($args, $argi - 1))) {
-                $val = $fa->value;
+            $argi = $m[1] ? +$m[1] : ++$fctx->argnum;
+            if (($fa = self::find_arg($fctx->args, $argi - 1))) {
+                $val = $fa->resolve_as($fctx->format);
                 if ($m[2]) {
                     assert(is_array($val));
                     $val = $val[substr($m[2], 1, -1)] ?? null;
@@ -476,36 +508,53 @@ class Fmt {
 
     /** @param string $s
      * @param int $pos
-     * @param list<mixed> $args
-     * @param int &$argnum
-     * @param ?string $context
-     * @param ?FmtItem $im
+     * @param FmtContext $fctx
      * @return array{int,?string} */
-    private function expand_brace($s, $pos, $args, &$argnum, $context, $im) {
-        if (preg_match('/\{(|0|[1-9]\d*|[a-zA-Z_]\w*)(|\[[^\]]*\])(|:(?:[^\}]|\}\})*)\}/A', $s, $m, 0, $pos)
-            && ($m[1] !== "" || ($argnum !== null && $m[2] === ""))
-            && !($im && $im->no_conversions && ($m[1] === "" || ctype_digit($m[1])))) {
+    private function expand_brace($s, $pos, $fctx) {
+        if (preg_match('/\{(|0|[1-9]\d*+|[a-zA-Z_]\w*+)(|\[[^\]]*+\])(|:(?:[^\}]|\}\})*+)\}/A', $s, $m, 0, $pos)
+            && ($m[1] !== "" || ($fctx->argnum !== null && $m[2] === ""))
+            && !($fctx->im && $fctx->im->no_conversions && ($m[1] === "" || ctype_digit($m[1])))) {
             if ($m[1] === "") {
-                $fa = self::find_arg($args, $argnum);
-                ++$argnum;
+                $fa = self::find_arg($fctx->args, $fctx->argnum);
+                ++$fctx->argnum;
             } else if (ctype_digit($m[1])) {
-                $fa = self::find_arg($args, intval($m[1]));
+                $fa = self::find_arg($fctx->args, intval($m[1]));
             } else {
-                $fa = self::find_arg($args, strtolower($m[1]));
+                $fa = self::find_arg($fctx->args, strtolower($m[1]));
             }
             if ($fa) {
-                $value = $fa->value;
-            } else if (($imt = $this->find($context, strtolower($m[1]), [$m[1]], null))
+                $value = $fa->resolve_as($fctx->format);
+            } else if (($imt = $this->find($fctx->context, strtolower($m[1]), [$m[1]], null))
                        && $imt->template) {
-                $value = $this->expand($imt->otext, $args, null, null);
+                $value = $this->expand($imt->otext, $fctx->args, null, null);
             } else {
                 $value = null;
             }
             if ($value !== null) {
-                if ($m[2] === ":url") {
+                if ($m[2]) {
+                    assert(is_array($value));
+                    $value = $value[substr($m[2], 1, -1)] ?? null;
+                }
+                if ($m[3] === ":url") {
                     $value = urlencode($value);
-                } else if ($m[2] === ":html") {
-                    $value = htmlspecialchars($value);
+                } else if ($m[3] === ":html") {
+                    if (!$fa || $fctx->format !== 5) {
+                        $value = htmlspecialchars($value);
+                    }
+                } else if ($m[3] === ":list") {
+                    assert(is_array($value));
+                    $value = commajoin($value);
+                } else if ($m[3] === ":numlist") {
+                    assert(is_array($value));
+                    $value = numrangejoin($value);
+                } else if ($m[3] === ":ftext") {
+                    if ($pos !== 0) {
+                        list($value_fmt, $value) = Ftext::parse($value);
+                        $my_fmt = Ftext::format($s);
+                        if ($my_fmt !== null && $my_fmt !== ($value_fmt ?? 0)) {
+                            $value = Ftext::convert($value, $value_fmt, $my_fmt);
+                        }
+                    }
                 }
                 return [$pos + strlen($m[0]), $value];
             }
@@ -525,7 +574,7 @@ class Fmt {
         $pos = $bpos = 0;
         $len = strlen($s);
         $ppos = $lpos = $rpos = -1;
-        $argnum = 0;
+        $fctx = new FmtContext($s, $args, $context, $im);
         $t = "";
 
         while (true) {
@@ -555,9 +604,9 @@ class Fmt {
                     ++$npos;
                 }
             } else if ($pos === $ppos) {
-                list($npos, $x) = $this->expand_percent($s, $pos, $args, $argnum, $context, $im);
+                list($npos, $x) = $this->expand_percent($s, $pos, $fctx);
             } else if ($pos === $lpos) {
-                list($npos, $x) = $this->expand_brace($s, $pos, $args, $argnum, $context, $im);
+                list($npos, $x) = $this->expand_brace($s, $pos, $fctx);
             }
 
             if ($x !== null) {
@@ -588,8 +637,7 @@ class Fmt {
     }
 
     /** @param string $id
-     * @return string
-     * @deprecated */
+     * @return string */
     function _i($id, ...$args) {
         $itext = "";
         if (($im = $this->find(null, $id, $args, null))) {
@@ -600,7 +648,8 @@ class Fmt {
 
     /** @param string $id
      * @param string $itext
-     * @return string */
+     * @return string
+     * @deprecated */
     function _id($id, $itext, ...$args) {
         if (($im = $this->find(null, $id, $args, null))) {
             $itext = $im->otext;
@@ -644,6 +693,10 @@ class Fmt {
         }
         return $itext;
     }
-}
 
-class_alias("Fmt", "IntlMsgSet");
+    /** @param string $text
+     * @return string */
+    static function simple($text, ...$args) {
+        return (new Fmt)->expand($text, $args, null, null);
+    }
+}

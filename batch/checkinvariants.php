@@ -1,6 +1,6 @@
 <?php
 // checkinvariants.php -- HotCRP batch invariant checking script
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
     require_once(dirname(__DIR__) . "/src/init.php");
@@ -12,22 +12,27 @@ class CheckInvariants_Batch {
     public $conf;
     /** @var bool */
     public $verbose;
-    /** @var bool */
-    public $fix_autosearch;
-    /** @var bool */
-    public $fix_inactive;
+    /** @var list<string> */
+    public $fix;
     /** @var ?string */
     public $regex;
     /** @var ?bool */
     public $color;
     /** @var ?bool */
     public $pad_prefix;
+    /** @var int */
+    private $width = 47;
 
     function __construct(Conf $conf, $arg) {
         $this->conf = $conf;
         $this->verbose = isset($arg["verbose"]);
-        $this->fix_autosearch = isset($arg["fix-autosearch"]);
-        $this->fix_inactive = isset($arg["fix-inactive"]);
+        $this->fix = $arg["fix"] ?? [];
+        if (isset($arg["fix-autosearch"])) {
+            $this->fix[] = "autosearch";
+        }
+        if (isset($arg["fix-inactive"])) {
+            $this->fix[] = "inactive";
+        }
         if (!empty($arg["_"])) {
             $r = [];
             foreach ($arg["_"] as $m) {
@@ -43,20 +48,33 @@ class CheckInvariants_Batch {
         $this->pad_prefix = isset($arg["pad-prefix"]);
     }
 
+    /** @param string $problem
+     * @return bool */
+    function want_fix($problem) {
+        return in_array($problem, $this->fix) || in_array("all", $this->fix);
+    }
+
+    /** @param string $report */
+    function report_fix($report) {
+        $fix = $this->color ? " \x1b[01;36mFIX\x1b[m\n" : " FIX\n";
+        fwrite(STDERR,
+            str_pad("{$this->conf->dbname}: {$report} ", $this->width, ".")
+            . $fix);
+    }
+
     /** @return int */
     function run() {
         $ic = new ConfInvariants($this->conf);
         $ncheck = 0;
         $ro = new ReflectionObject($ic);
-        $color = $this->color ?? posix_isatty(STDERR);
+        $color = $this->color = $this->color ?? posix_isatty(STDERR);
         $dbname = $this->conf->dbname;
-        $width = 47;
         foreach ($ro->getMethods() as $m) {
             if (str_starts_with($m->name, "check_")
                 && $m->name !== "check_all"
                 && (!$this->regex || preg_match($this->regex, $m->name))) {
                 if ($this->verbose) {
-                    $mpfx = str_pad("{$dbname}: {$m->name} ", $width, ".") . " ";
+                    $mpfx = str_pad("{$dbname}: {$m->name} ", $this->width, ".") . " ";
                     if ($color) {
                         fwrite(STDERR, "{$mpfx}\x1b[01;36mRUN\x1b[m");
                     } else {
@@ -87,18 +105,41 @@ class CheckInvariants_Batch {
             return 1;
         }
 
-        $fix = $color ? " \x1b[01;36mFIX\x1b[m\n" : " FIX\n";
-        if (isset($ic->problems["autosearch"]) && $this->fix_autosearch) {
-            if ($this->verbose) {
-                fwrite(STDERR, str_pad("{$dbname}: automatic tags ", $width, ".") . $fix);
-            }
+        if (isset($ic->problems["no_papersub"]) && $this->want_fix("summary")) {
+            $this->report_fix("`no_papersub` summary setting");
+            $this->conf->update_papersub_setting(0);
+        }
+        if (isset($ic->problems["paperacc"]) && $this->want_fix("summary")) {
+            $this->report_fix("`paperacc` summary setting");
+            $this->conf->update_paperacc_setting(0);
+        }
+        if (isset($ic->problems["rev_tokens"]) && $this->want_fix("summary")) {
+            $this->report_fix("`rev_tokens` summary setting");
+            $this->conf->update_rev_tokens_setting(0);
+        }
+        if (isset($ic->problems["paperlead"]) && $this->want_fix("summary")) {
+            $this->report_fix("`paperlead` summary setting");
+            $this->conf->update_paperlead_setting(0);
+        }
+        if (isset($ic->problems["papermanager"]) && $this->want_fix("summary")) {
+            $this->report_fix("`papermanager` summary setting");
+            $this->conf->update_papermanager_setting(0);
+        }
+        if (isset($ic->problems["metareviews"]) && $this->want_fix("summary")) {
+            $this->report_fix("`metareviews` summary setting");
+            $this->conf->update_metareviews_setting(0);
+        }
+        if (isset($ic->problems["autosearch"]) && $this->want_fix("autosearch")) {
+            $this->report_fix("automatic tags");
             $this->conf->update_automatic_tags();
         }
-        if (isset($ic->problems["inactive"]) && $this->fix_inactive) {
-            if ($this->verbose) {
-                fwrite(STDERR, str_pad("{$dbname}: inactive documents ", $width, ".") . $fix);
-            }
+        if (isset($ic->problems["inactive"]) && $this->want_fix("inactive")) {
+            $this->report_fix("inactive documents");
             $this->fix_inactive_documents();
+        }
+        if (isset($ic->problems["paper_denormalization"]) && $this->want_fix("document-match")) {
+            $this->report_fix("document match");
+            $this->fix_document_match();
         }
         return 0;
     }
@@ -119,6 +160,17 @@ class CheckInvariants_Batch {
         }
     }
 
+    private function fix_document_match() {
+        $result = $this->conf->qe("select * from PaperStorage where paperStorageId>1 and size<0");
+        while (($doc = DocumentInfo::fetch($result, $this->conf))) {
+            $doc->size();
+        }
+        $result->close();
+
+        $this->conf->qe("update Paper p join PaperStorage s on (s.paperId=p.paperId and s.paperStorageId=p.paperStorageId) set p.size=s.size where p.size<0 and p.finalPaperStorageId<=1");
+        $this->conf->qe("update Paper p join PaperStorage s on (s.paperId=p.paperId and s.paperStorageId=p.finalPaperStorageId) set p.size=s.size where p.size<0 and p.finalPaperStorageId>1");
+    }
+
     /** @return CheckInvariants_Batch */
     static function make_args($argv) {
         $arg = (new Getopt)->long(
@@ -126,14 +178,15 @@ class CheckInvariants_Batch {
             "config:,c: !",
             "help,h !",
             "verbose,V Be verbose",
-            "fix-autosearch Repair any incorrect autosearch tags",
-            "fix-inactive Repair any inappropriately inactive documents",
+            "fix-autosearch ! Repair any incorrect autosearch tags",
+            "fix-inactive ! Repair any inappropriately inactive documents",
+            "fix[] =PROBLEM Repair PROBLEM [all, autosearch, inactive, setting, document-match]",
             "color",
             "no-color !",
             "pad-prefix !"
         )->helpopt("help")
          ->description("Check invariants in a HotCRP database.
-Usage: php batch/checkinvariants.php [-n CONFID] [--fix-autosearch] [INVARIANT...]\n")
+Usage: php batch/checkinvariants.php [-n CONFID] [--fix=WHAT] [INVARIANT...]\n")
          ->parse($argv);
 
         $conf = initialize_conf($arg["config"] ?? null, $arg["name"] ?? null);

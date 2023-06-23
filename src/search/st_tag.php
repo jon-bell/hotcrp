@@ -1,6 +1,6 @@
 <?php
 // search/st_tag.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Tag_SearchTerm extends SearchTerm {
     /** @var TagSearchMatcher */
@@ -54,22 +54,8 @@ class Tag_SearchTerm extends SearchTerm {
 
         // expand automatic tags if requested
         $allterms = [];
-        if ($srch->expand_automatic
-            && ($dt = $srch->conf->tags())->has_automatic) {
-            $nomatch = [];
-            foreach ($dt->filter("automatic") as $t) {
-                if ($tsm->test_ignore_value(" {$t->tag}#")
-                    && $t->automatic_formula_expression() === "0") {
-                    $nomatch[] = " " . preg_quote($t->tag) . "#";
-                    if ($tsm->test_value(0.0)) {
-                        $asrch = new PaperSearch($srch->conf->root_user(), ["q" => $t->automatic_search(), "t" => "all"]);
-                        $allterms[] = $asrch->term();
-                    }
-                }
-            }
-            if (!empty($nomatch)) {
-                $tsm->set_tag_exclusion_regex(join("|", $nomatch));
-            }
+        if ($srch->expand_automatic > 0) {
+            $allterms = self::expand_automatic($tsm, $sword, $srch);
         }
 
         // add value term
@@ -87,19 +73,79 @@ class Tag_SearchTerm extends SearchTerm {
             }
         }
 
-        // return
-        foreach ($tsm->error_texts() as $e) {
-            $srch->lwarning($sword, "<5>$e");
+        foreach ($tsm->error_ftexts() as $e) {
+            $srch->lwarning($sword, $e);
         }
         return SearchTerm::combine("or", ...$allterms)->negate_if($negated);
     }
+
+    /** @return list<SearchTerm> */
+    static function expand_automatic(TagSearchMatcher $tsm, SearchWord $sword,
+                                     PaperSearch $srch) {
+        $dt = $srch->conf->tags();
+        if (!$dt->has_automatic) {
+            return [];
+        }
+
+        $allterms = $nomatch = [];
+        foreach ($dt->filter("automatic") as $t) {
+            if (!$tsm->test_ignore_value(" {$t->tag}#")) {
+                continue;
+            }
+            if ($srch->expand_automatic >= 10) {
+                $srch->warning_at("circular_automatic");
+                continue;
+            }
+            $nomatch[] = " " . preg_quote($t->tag) . "#";
+
+            $asrch = new PaperSearch($srch->conf->root_user(), [
+                "q" => $t->automatic_search(), "t" => "all"
+            ]);
+            $asrch->set_expand_automatic($srch->expand_automatic + 1);
+            if ($asrch->has_problem_at("circular_automatic")) {
+                $srch->warning_at("circular_automatic");
+                if ($srch->expand_automatic === 1) {
+                    $srch->lwarning($sword, "<0>Circular reference in automatic tag #{$t->tag}");
+                }
+            }
+            $aterm = $asrch->full_term();
+
+            $afe = $t->automatic_formula_expression();
+            if ($afe === "0") {
+                if ($tsm->test_value(0.0)) {
+                    $allterms[] = $aterm;
+                }
+            } else {
+                $vsms = $tsm->value_matchers();
+                if (empty($vsms)) {
+                    $ftext = "!isnull({$afe})";
+                } else {
+                    $ftexts = [];
+                    foreach ($vsms as $cm) {
+                        $ftexts[] = "_v_" . $cm->comparison();
+                    }
+                    $ftext = "let _v_ = {$afe} in " . join(" && ", $ftexts);
+                }
+                $formula = new Formula($ftext);
+                $formula->check($asrch->user);
+                $allterms[] = SearchTerm::combine("and", $aterm, new Formula_SearchTerm($formula));
+            }
+        }
+
+        if (!empty($nomatch)) {
+            $tsm->set_tag_exclusion_regex(join("|", $nomatch));
+        }
+        return $allterms;
+    }
+
+
     const SQLEXPR_PREFIX = 'exists (select * from PaperTag where paperId=Paper.paperId';
     function sqlexpr(SearchQueryInfo $sqi) {
         if ($this->tsm->test_empty()) {
             return "true";
         } else {
             $sql = $this->tsm->sqlexpr("PaperTag");
-            return self::SQLEXPR_PREFIX . ($sql ? " and $sql" : "") . ')';
+            return self::SQLEXPR_PREFIX . ($sql ? " and {$sql}" : "") . ')';
         }
     }
     function is_sqlexpr_precise() {
@@ -132,7 +178,7 @@ class Tag_SearchTerm extends SearchTerm {
      * @param ?TagInfo $dt
      * @return PaperColumn */
     private function _make_default_sort_column($pl, $tag, $dt) {
-        $xjs = Tag_PaperColumn::expand("#{$tag}", $pl->user, (object) [], ["#{$tag}", "#", $tag]);
+        $xjs = Tag_PaperColumn::expand("#{$tag}", $pl->xtp, (object) [], ["#{$tag}", "#", $tag]);
         assert(count($xjs) === 1 && $xjs[0]->function === "+Tag_PaperColumn");
         return PaperColumn::make($pl->conf, $xjs[0], $dt && $dt->votish ? ["reverse"] : []);
     }
@@ -146,7 +192,7 @@ class Tag_SearchTerm extends SearchTerm {
             && $dt->order_anno) {
             return $this->_make_default_sort_column($pl, $tag, $dt);
         }
-        foreach ($pl->rowset() as $prow) {
+        foreach ($pl->unordered_rowset() as $prow) {
             if ($prow->tag_value($tag) != 0) {
                 return $this->_make_default_sort_column($pl, $tag, $dt);
             }

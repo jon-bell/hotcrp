@@ -1,6 +1,6 @@
 <?php
 // pages/p_adminhome.php -- HotCRP home page fragments for administrators
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class AdminHome_Page {
     static function check_admin(Contact $user, Qrequest $qreq) {
@@ -79,7 +79,7 @@ class AdminHome_Page {
             }
         }
         // Any -100 preferences around?
-        $result = $conf->preference_conflict_result("s", "limit 1");
+        $result = PrefConflict_Autoassigner::query_result($conf, true);
         if (($row = $result->fetch_row())) {
             $ml[] = new MessageItem(null, '<5>PC members have indicated paper conflicts (using review preferences of &#8722;100 or less) that aren’t yet confirmed. <a href="' . $conf->hoturl("=conflictassign") . '" class="nw">Confirm these conflicts</a>', MessageSet::MARKED_NOTE);
         }

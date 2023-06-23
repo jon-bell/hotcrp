@@ -34,8 +34,8 @@ class HelpRenderer extends Ht {
             if (str_ends_with($id, "-")) {
                 $id = substr($id, 0, strlen($id) - 1);
             }
-            if (preg_match('/\A(?:htctl.*|fold.*|body.*|tracker.*|msg.*|header.*|quicklink.*|tla.*|-|)\z/', $id)) {
-                $id = ($id === "" || $id === "-" ? null : "h-$id");
+            if (preg_match('/\A(?:fold.*|-.*|[a-z]-.*|)\z/', $id)) {
+                $id = ($id === "" || $id === "-" ? null : "heading-{$id}");
             }
             if ($id) {
                 $n = "";
@@ -45,13 +45,13 @@ class HelpRenderer extends Ht {
                 $id .= $n;
             }
         }
-        if ($id || $title) {
-            if ($id) {
-                $this->_h3ids[$id] = true;
-            }
-            return '<h3 class="helppage"' . ($id ? " id=\"{$id}\"" : "") . '>' . $title . "</h3>\n";
-        } else {
+        if (!$id && !$title) {
             return "";
+        } else if ($id) {
+            $this->_h3ids[$id] = true;
+            return "<h3 class=\"helppage\" id=\"{$id}\">{$title}</h3>\n";
+        } else {
+            return "<h3 class=\"helppage\">{$title}</h3>\n";
         }
     }
 
@@ -60,7 +60,7 @@ class HelpRenderer extends Ht {
     function table($tabletype = false) {
         $this->_rowidx = 0;
         $this->_tabletype = $tabletype;
-        return $this->_tabletype ? "" : '<table class="demargin"><tbody>';
+        return $this->_tabletype ? "" : '<table class="sentry-demargin"><tbody>';
     }
 
     /** @param string $title
@@ -71,7 +71,7 @@ class HelpRenderer extends Ht {
         if ($this->_tabletype) {
             return $this->subhead($title, $id);
         } else {
-            return '<tr><td class="sentry nw remargin-left remargin-right" colspan="2"><h4 class="helppage"'
+            return '<tr><td class="sentry nw" colspan="2"><h4 class="helppage"'
                 . ($id ? " id=\"{$id}\"" : "") . '>'
                 . $title . "</h4></td></tr>\n";
         }
@@ -89,11 +89,11 @@ class HelpRenderer extends Ht {
                 . "</td><td class=\"helplist-dd remargin-right\">"
                 . $entry . "</td></tr></tbody></table></div>\n";
         } else {
-            $t = '<tr class="k' . $this->_rowidx . '"><td class="sentry remargin-left';
+            $t = '<tr class="k' . $this->_rowidx . '"><td class="sentry';
             if ((string) $entry === "") {
-                $t .= ' remargin-right" colspan="2">' . $caption;
+                $t .= '" colspan="2">' . $caption;
             } else {
-                $t .= '">' . $caption . '</td><td class="sentry remargin-right">' . $entry;
+                $t .= '">' . $caption . '</td><td class="sentry">' . $entry;
             }
             $t .= "</td></tr>\n";
         }

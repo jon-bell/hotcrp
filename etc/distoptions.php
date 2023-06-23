@@ -157,7 +157,7 @@ $Opt["emailSender"] = null;
 //                   " <span class='barsep'>|</span> ".
 //   assetsUrl       URL prefix for assets (stylesheets/, scripts/, images/).
 //                   Defaults to the conference installation.
-//   scriptAssetsUrl URL prefix for script assets. Defaults to assetsURL,
+//   scriptAssetsUrl URL prefix for script assets. Defaults to assetsUrl,
 //                   except for browsers known to ignore `crossorigin`, where
 //                   it defaults to the conference installation.
 //   jqueryUrl       URL for jQuery. Defaults to the local minified jquery.
@@ -173,7 +173,7 @@ $Opt["emailSender"] = null;
 //                   for scores better than B (i.e., A), rather than scores
 //                   alphabetically after B (i.e., C or D).
 //   noFooterVersion Set to true to avoid a version comment in footer HTML.
-//   strictJavascript  If true, send Javascript with "use strict".
+//   strictJavascript If true, send Javascript with "use strict".
 //   hideManager     If set, PC members are not shown paper managers.
 //   disableCapabilities If set, emails to authors will not have a
 //                   token enabling them to view their papers without logging in.

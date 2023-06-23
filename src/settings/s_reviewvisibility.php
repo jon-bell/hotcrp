@@ -1,6 +1,6 @@
 <?php
 // settings/s_reviewvisibility.php -- HotCRP settings > decisions page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class ReviewVisibility_SettingParser extends SettingParser {
     function set_oldv(Si $si, SettingValues $sv) {
@@ -36,7 +36,7 @@ class ReviewVisibility_SettingParser extends SettingParser {
             $sv->append_item_at($name, $mi);
             $parent_setting && $sv->msg_at($parent_setting, "", $mi->status);
         }
-        foreach ($srch->term()->preorder() as $qe) {
+        foreach ($srch->main_term()->preorder() as $qe) {
             if ($qe instanceof Tag_SearchTerm) {
                 foreach ($qe->tsm->tag_patterns() as $tag) {
                     if (strpos($tag, "*") === false
@@ -100,7 +100,11 @@ class ReviewVisibility_SettingParser extends SettingParser {
         } else {
             $hint = "Visible reviewer comments will be identified by “Reviewer A”, “Reviewer B”, etc.";
         }
-        $sv->print_checkbox("comment_allow_author", "Authors can <strong>exchange comments</strong> with reviewers", ["class" => "uich js-foldup", "hint_class" => "fx"], $hint);
+        $sv->print_checkbox("comment_allow_author", "Authors can <strong>exchange comments</strong> with reviewers", [
+            "class" => "uich js-foldup",
+            "hint_class" => "fx",
+            "hint" => $hint
+        ]);
         echo "</div>\n";
     }
 

@@ -1,6 +1,6 @@
 <?php
 // paperinfo.php -- HotCRP paper objects
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class PaperContactInfo {
     /** @var int
@@ -19,6 +19,7 @@ class PaperContactInfo {
     public $reviewRound = 0;
     /** @var int */
     public $review_status = 0;    // 0 means no review
+    const RS_NONE = 0;
     const RS_DECLINED = 1;        // declined assigned review
     const RS_UNSUBMITTED = 2;     // review not submitted, needs submit
     const RS_PROXIED = 3;         // review proxied (e.g., lead)
@@ -56,8 +57,6 @@ class PaperContactInfo {
     public $can_view_decision;
     /** @var 0|1|2 */
     public $view_authors_state;
-    /** @var ?string */
-    public $perm_tags;
 
     // cached by PaperInfo methods
     /** @var ?list<ReviewInfo> */
@@ -100,7 +99,8 @@ class PaperContactInfo {
         return $ci;
     }
 
-    private function mark_conflict($ct) {
+    /** @param int $ct */
+    function mark_conflict($ct) {
         $this->conflictType = max($ct, $this->conflictType);
     }
 
@@ -137,71 +137,61 @@ class PaperContactInfo {
 
     /** @param Contact $user */
     static function load_into(PaperInfo $prow, $user) {
-        $conf = $prow->conf;
-        $pid = $prow->paperId;
-        $q = "select conflictType, reviewType, reviewSubmitted, reviewNeedsSubmit, reviewRound";
-        $cid = $user->contactXid;
+        // choose user set:
+        // normally just this user; might be whole PC
+        $user_set = [$user->contactXid => $user];
+        $only_user_id = $user->contactXid;
         $rev_tokens = $user->review_tokens();
-        if ($cid > 0
+        if ($user->contactXid > 0
             && !$rev_tokens
-            && count($prow->_row_set) > 1) {
-            $result = $conf->qe("$q, Paper.paperId paperId, ? contactId
-                from Paper
-                left join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId=?)
-                left join PaperReview on (PaperReview.paperId=Paper.paperId and PaperReview.contactId=?)
-                where Paper.paperId?a",
-                $cid, $cid, $cid, $prow->_row_set->paper_ids());
-            foreach ($prow->_row_set as $row) {
-                $row->_clear_contact_info($user);
+            && ($user->roles & Contact::ROLE_PC) !== 0) {
+            $viewer = Contact::$main_user;
+            if ($viewer !== $user
+                && (!$viewer || $viewer->privChair || $viewer->contactXid === $prow->managerContactId)
+                && $user === $prow->conf->pc_member_by_id($user->contactId)) {
+                $user_set = $prow->conf->pc_members();
+                $only_user_id = null;
             }
-            while (($local = $result->fetch_row())) {
-                $row = $prow->_row_set->get((int) $local[5]);
-                $ci = $row->_get_contact_info((int) $local[6]);
-                $ci->mark_conflict((int) $local[0]);
-                $ci->mark_review_type((int) $local[1], (int) $local[2], (int) $local[3], (int) $local[4]);
+        }
+
+        // clear contact info
+        $row_set = $prow->_row_set;
+        foreach ($row_set as $pr) {
+            foreach ($user_set as $u) {
+                $pr->_clear_contact_info($u);
             }
-            Dbl::free($result);
+        }
+
+        // return if nothing to load
+        if (($only_user_id ?? 1) <= 0
+            && !$rev_tokens) {
             return;
         }
-        if ($cid > 0
-            && !$rev_tokens
-            && (!($viewer = Contact::$main_user)
-                || ($viewer->contactId != $cid
-                    && ($viewer->privChair || $viewer->contactXid === $prow->managerContactId)))
-            && ($pcm = $conf->pc_members())
-            && isset($pcm[$cid])) {
-            foreach ($pcm as $u) {
-                $prow->_clear_contact_info($u);
-            }
-            $result = $conf->qe("$q, ContactInfo.contactId
-                from ContactInfo
-                left join PaperConflict on (PaperConflict.paperId=? and PaperConflict.contactId=ContactInfo.contactId)
-                left join PaperReview on (PaperReview.paperId=? and PaperReview.contactId=ContactInfo.contactId)
-                where roles!=0 and (roles&" . Contact::ROLE_PC . ")!=0",
-                $pid, $pid);
-        } else {
-            $prow->_clear_contact_info($user);
-            if ($cid > 0 || $rev_tokens) {
-                $q = "$q, ? contactId
-                from (select ? paperId) P
-                left join PaperConflict on (PaperConflict.paperId=? and PaperConflict.contactId=?)
-                left join PaperReview on (PaperReview.paperId=? and (PaperReview.contactId=?";
-                $qv = [$cid, $pid, $pid, $cid, $pid, $cid];
-                if ($rev_tokens) {
-                    $q .= " or PaperReview.reviewToken?a";
-                    $qv[] = $rev_tokens;
+
+        // contact database
+        $prwhere = "contactId?a";
+        $qv = [];
+        if ($rev_tokens) {
+            $prwhere = "({$prwhere} or reviewToken?a)";
+            $qv[] = $rev_tokens;
+        }
+        // two queries is marginally faster than one union query
+        $mresult = Dbl::multi_qe($prow->conf->dblink, "select paperId, contactId, conflictType from PaperConflict where paperId?a and contactId?a;
+            select paperId, contactId, null, reviewType, reviewSubmitted, reviewNeedsSubmit, reviewRound from PaperReview where paperId?a and {$prwhere}",
+            $row_set->paper_ids(), array_keys($user_set),
+            $row_set->paper_ids(), array_keys($user_set), ...$qv);
+        while (($result = $mresult->next())) {
+            while (($x = $result->fetch_row())) {
+                $pr = $row_set->get((int) $x[0]);
+                $ci = $pr->_get_contact_info($only_user_id ?? (int) $x[1]);
+                if ($x[2] !== null) {
+                    $ci->mark_conflict((int) $x[2]);
+                } else {
+                    $ci->mark_review_type((int) $x[3], (int) $x[4], (int) $x[5], (int) $x[6]);
                 }
-                $result = $conf->qe_apply("$q))", $qv);
-            } else {
-                $result = null;
             }
+            $result->close();
         }
-        while ($result && ($local = $result->fetch_row())) {
-            $ci = $prow->_get_contact_info((int) $local[5]);
-            $ci->mark_conflict((int) $local[0]);
-            $ci->mark_review_type((int) $local[1], (int) $local[2], (int) $local[3], (int) $local[4]);
-        }
-        Dbl::free($result);
     }
 
     /** @return PaperContactInfo */
@@ -212,26 +202,39 @@ class PaperContactInfo {
         }
         return $this->forced_rights_link;
     }
+}
 
-    /** @param string $perm
-     * @return ?bool */
-    function perm_tag_allows($perm) {
-        if ($this->perm_tags !== null
-            && ($pos = stripos($this->perm_tags, " perm:$perm#")) !== false) {
-            return $this->perm_tags[$pos + strlen($perm) + 7] !== "-";
-        } else {
-            return null;
-        }
+class PaperConflictInfo {
+    /** @var int
+     * @readonly */
+    public $contactId;
+    /** @var int
+     * @readonly */
+    public $conflictType;
+    /** @var Contact
+     * @readonly */
+    public $user;
+    /** @var ?int
+     * @readonly */
+    public $author_index;
+
+    function __construct($user, $ctype, $author_index) {
+        $this->contactId = $user->contactId;
+        $this->conflictType = $ctype;
+        $this->user = $user;
+        $this->author_index = $author_index;
     }
 }
 
-class PaperInfoSet implements ArrayAccess, IteratorAggregate, Countable {
+class PaperInfoSet implements IteratorAggregate, Countable {
     /** @var list<PaperInfo> */
     private $prows = [];
     /** @var array<int,PaperInfo> */
     private $by_pid = [];
     /** @var int */
     public $loaded_allprefs = 0;
+    /** @var bool */
+    public $prefetched_conflict_users = false;
     /** @var array<int,list<AuthorMatcher>> */
     private $collaborator_matchers_by_uid = [];
 
@@ -314,6 +317,11 @@ class PaperInfoSet implements ArrayAccess, IteratorAggregate, Countable {
     function get($pid) {
         return $this->by_pid[$pid] ?? null;
     }
+    /** @param int $pid
+     * @return bool */
+    function contains($pid) {
+        return isset($this->by_pid[$pid]);
+    }
     /** @param callable(PaperInfo):bool $func
      * @return PaperInfoSet|Iterable<PaperInfo> */
     function filter($func) {
@@ -351,44 +359,36 @@ class PaperInfoSet implements ArrayAccess, IteratorAggregate, Countable {
     function getIterator() {
         return new ArrayIterator($this->prows);
     }
-    #[\ReturnTypeWillChange]
-    /** @param int $offset */
-    function offsetExists($offset) {
-        return isset($this->by_pid[$offset]);
-    }
-    #[\ReturnTypeWillChange]
-    /** @param int $offset
-     * @return ?PaperInfo */
-    function offsetGet($offset) {
-        return $this->by_pid[$offset] ?? null;
-    }
-    #[\ReturnTypeWillChange]
-    function offsetSet($offset, $value) {
-        throw new Exception("invalid PaperInfoSet::offsetSet");
-    }
-    #[\ReturnTypeWillChange]
-    function offsetUnset($offset) {
-        throw new Exception("invalid PaperInfoSet::offsetUnset");
-    }
     function ensure_full_reviews() {
         if (!empty($this->prows)) {
             $this->prows[0]->ensure_full_reviews();
         }
     }
 
-    /** @param Author $cflt
+    function prefetch_conflict_users() {
+        if ($this->prefetched_conflict_users
+            || empty($this->prows)) {
+            return;
+        }
+        $this->prefetched_conflict_users = true;
+        foreach ($this->prows as $prow) {
+            foreach ($prow->conflict_types() as $uid => $ctype) {
+                if ($uid > 0)
+                    $prow->conf->prefetch_user_by_id($uid);
+            }
+        }
+    }
+
+    /** @param Contact $u
      * @return list<AuthorMatcher> */
-    function collaborator_matchers($cflt) {
-        $ms = $this->collaborator_matchers_by_uid[$cflt->contactId] ?? null;
+    function collaborator_matchers($u) {
+        $ms = $this->collaborator_matchers_by_uid[$u->contactId] ?? null;
         if ($ms === null) {
             $ms = [];
-            foreach (Contact::make_collaborator_generator($cflt->collaborators ?? "") as $m) {
-                $m->paperId = $cflt->paperId;
-                $m->contactId = $cflt->contactId;
-                $m->author_index = $cflt->author_index;
+            foreach ($u->collaborator_generator() as $m) {
                 $ms[] = $m;
             }
-            $this->collaborator_matchers_by_uid[$cflt->contactId] = $ms;
+            $this->collaborator_matchers_by_uid[$u->contactId] = $ms;
         }
         return $ms;
     }
@@ -402,7 +402,7 @@ class PaperInfo {
     // Always available, even in "minimal" paper skeletons
     /** @var int
      * @readonly */
-    public $paperId = 0;
+    public $paperId;
     /** @var int
      * @readonly */
     public $paperXid;      // unique among all PaperInfos
@@ -442,8 +442,10 @@ class PaperInfo {
     public $paperFormat;
     /** @var ?string */
     public $capVersion;
-    /** @var ?array<string,mixed> */
+    /** @var ?string */
     public $dataOverflow;
+    /** @var ?array<string,mixed> */
+    public $_dataOverflow;
 
     /** @var ?int */
     public $paperStorageId;
@@ -451,8 +453,8 @@ class PaperInfo {
     public $finalPaperStorageId;
     /** @var ?string */
     public $pdfFormatStatus;
-    /** @var null|int|string */
-    public $size;
+    /** @var ?int */
+    private $size;
     /** @var ?string */
     public $mimetype;
     /** @var ?string */
@@ -487,8 +489,6 @@ class PaperInfo {
     public $conflictType;
     /** @var ?int */
     public $watch;
-    /** @var ?int */
-    private $_watch_cid;
 
     /** @var ?string */
     public $reviewSignatures;
@@ -527,12 +527,18 @@ class PaperInfo {
     private $_contact_info = [];
     /** @var int */
     private $_rights_version = 0;
-    /** @var ?list<Author> */
-    private $_author_array;
+    /** @var ?Contact */
+    private $_author_user;
+    /** @var int */
+    private $_flags = 0;
+    /** @var ?SubmissionRound */
+    private $_submission_round;
     /** @var ?array<string,string> */
     private $_deaccents;
-    /** @var ?string */
-    private $_full_collaborators;
+    /** @var ?list<Author> */
+    private $_author_array;
+    /** @var ?associative-array<int,int> */
+    private $_ctype_array;
     /** @var ?list<AuthorMatcher> */
     private $_collaborator_array;
     /** @var ?array<int,array{int,?int}> */
@@ -544,7 +550,7 @@ class PaperInfo {
     /** @var ?int */
     private $_desirability;
     /** @var ?list<int> */
-    private $_topics_array;
+    private $_topic_array;
     /** @var ?array<int,float> */
     private $_topic_interest_score_array;
     /** @var ?array<int,list<int>> */
@@ -559,20 +565,12 @@ class PaperInfo {
     private $_document_array;
     /** @var ?array<int,array<int,int>> */
     private $_doclink_array;
-    /** @var ?array<int,Author> */
-    private $_conflict_array;
-    /** @var bool */
-    private $_conflict_array_email;
-    /** @var ?Contact */
-    private $_paper_creator;
     /** @var ?DecisionInfo */
     private $_decision;
     /** @var ?array<int,ReviewInfo> */
     private $_review_array;
     /** @var int */
     private $_review_array_version = 0;
-    /** @var int */
-    private $_reviews_flags = 0;
     /** @var ?list<?bool> */
     private $_reviews_have;
     /** @var ?list<ReviewInfo> */
@@ -589,26 +587,29 @@ class PaperInfo {
     private $_request_array;
     /** @var ?list<ReviewRefusalInfo> */
     private $_refusal_array;
+    /** @var ?int */
+    private $_watch_cid;
     /** @var ?array<int,int> */
     private $_watch_array;
     /** @var ?TokenInfo */
     public $_author_view_token;
-    /** @var ?Contact */
-    private $_author_view_user;
     /** @var ?int */
-    public $_sort_subset;
-    /** @var ?bool */
-    private $_allow_absent;
-    /** @var ?int */
-    private $_pause_mark_inactive_documents;
+    public $_search_group;
+    /** @var ?array<string,mixed> */
+    public $_old_prop;
 
-    /** @var ?array */
-    public $anno;
-
-    const REVIEW_HAS_FULL = 1;
-    const REVIEW_HAS_NAMES = 2;
-    const REVIEW_HAS_LASTLOGIN = 4;
-    const REVIEW_HAS_WORDCOUNT = 8;
+    const REVIEW_HAS_FULL = 0x01;
+    const REVIEW_HAS_NAMES = 0x02;
+    const REVIEW_HAS_LASTLOGIN = 0x04;
+    const REVIEW_HAS_WORDCOUNT = 0x08;
+    const REVIEW_FLAGS = 0xFF;
+    const MARK_INACTIVE_PAUSE_1 = 0x100;
+    const MARK_INACTIVE_PAUSE_2 = 0x200;
+    const MARK_INACTIVE_PAUSE = 0x300;
+    const ALLOW_ABSENT = 0x400;
+    const IS_NEW = 0x800;
+    const HAS_WANT_SUBMITTED = 0x1000;
+    const WANT_SUBMITTED = 0x2000;
 
     const SUBMITTED_AT_FOR_WITHDRAWN = 1000000000;
     static private $next_uid = 0;
@@ -650,9 +651,12 @@ class PaperInfo {
         if (isset($this->finalPaperStorageId)) {
             $this->finalPaperStorageId = (int) $this->finalPaperStorageId;
         }
+        if (isset($this->size)) {
+            $this->size = (int) $this->size;
+        }
         if (isset($this->dataOverflow) && is_string($this->dataOverflow)) {
-            $this->dataOverflow = json_decode($this->dataOverflow, true);
-            if ($this->dataOverflow === null) {
+            $this->_dataOverflow = json_decode($this->dataOverflow, true);
+            if ($this->_dataOverflow === null) {
                 error_log("{$this->conf->dbname}: #{$this->paperId}: bad dataOverflow");
             }
         }
@@ -718,21 +722,28 @@ class PaperInfo {
         return $prow;
     }
 
-    /** @return PaperInfo */
-    static function make_new(Contact $user) {
+    /** @param ?string $stag
+     * @return PaperInfo
+     * @suppress PhanAccessReadOnlyProperty */
+    static function make_new(Contact $user, $stag) {
         $prow = new PaperInfo($user->conf);
+        $prow->paperId = 0;
+        $prow->timeModified = 0;
         $prow->abstract = $prow->title = $prow->collaborators =
             $prow->authorInformation = $prow->paperTags = $prow->optionIds =
             $prow->topicIds = "";
-        $prow->shepherdContactId = 0;
+        $prow->leadContactId = $prow->shepherdContactId = 0;
         $prow->blind = true;
-        $prow->_paper_creator = $user;
-        $prow->check_rights_version();
-        $ci = PaperContactInfo::make_empty($prow, $user);
-        $ci->conflictType = CONFLICT_CONTACTAUTHOR;
-        $prow->_contact_info[$user->contactXid] = $ci;
+        $prow->allConflictType = $user->contactId . " " . CONFLICT_CONTACTAUTHOR;
+        $prow->_author_user = $user;
         $prow->_comment_skeleton_array = $prow->_comment_array = [];
         $prow->_row_set->add_paper($prow);
+        if ($stag && ($sr = $user->conf->submission_round_by_tag($stag))) {
+            $prow->paperTags = " {$stag}#0";
+            $prow->_submission_round = $sr;
+        }
+        $prow->set_is_new(true);
+        $prow->check_rights_version(); // ensure _contact_info[author_user] exists
         return $prow;
     }
 
@@ -755,6 +766,12 @@ class PaperInfo {
         $prow->incorporate_user($user);
         return $prow;
     }
+
+    /** @return ?PaperInfo */
+    function reload() {
+        return $this->conf->paper_by_id($this->paperId);
+    }
+
 
     /** @param string $prefix
      * @return string */
@@ -795,12 +812,17 @@ class PaperInfo {
     private function check_rights_version() {
         if ($this->_rights_version !== Contact::$rights_version) {
             if ($this->_rights_version) {
-                $this->_reviews_flags = 0;
+                $this->_flags &= ~self::REVIEW_FLAGS;
                 $this->_contact_info = [];
-                $this->reviewSignatures = $this->_review_array = $this->allConflictType = $this->_conflict_array = $this->_reviews_have = null;
+                $this->reviewSignatures = $this->_review_array = $this->_reviews_have = null;
+                $this->allConflictType = $this->_ctype_array = null;
                 ++$this->_review_array_version;
             }
             $this->_rights_version = Contact::$rights_version;
+            if ($this->_author_user) {
+                // author_user should always be in _contact_info
+                $this->contact_info($this->_author_user);
+            }
         }
     }
 
@@ -815,9 +837,12 @@ class PaperInfo {
         return $this->_contact_info[$cid];
     }
 
-    /** @param Contact $user */
+    /** @param Contact $user
+     * @return PaperContactInfo */
     function _clear_contact_info($user) {
-        $this->_contact_info[$user->contactXid] = PaperContactInfo::make_empty($this, $user);
+        $ci = PaperContactInfo::make_empty($this, $user);
+        $this->_contact_info[$user->contactXid] = $ci;
+        return $ci;
     }
 
     /** @return PaperContactInfo */
@@ -827,16 +852,18 @@ class PaperInfo {
         if (!array_key_exists($cid, $this->_contact_info)) {
             if ($this->_review_array
                 || $this->reviewSignatures !== null) {
-                $ci = PaperContactInfo::make_empty($this, $user);
-                if (($c = $this->conflict_by_id($cid))) {
-                    $ci->conflictType = $c->conflictType;
+                $ci = $this->_clear_contact_info($user);
+                if ($cid > 0) {
+                    $ci->mark_conflict(($this->conflict_types())[$cid] ?? 0);
                 }
                 foreach ($this->reviews_by_user($cid, $user->review_tokens()) as $rrow) {
                     $ci->mark_review($rrow);
                 }
-                $this->_contact_info[$cid] = $ci;
             } else {
                 PaperContactInfo::load_into($this, $user);
+            }
+            if ($user === $this->_author_user) {
+                $this->_contact_info[$cid]->mark_conflict(CONFLICT_CONTACTAUTHOR);
             }
         }
         return $this->_contact_info[$cid];
@@ -847,56 +874,161 @@ class PaperInfo {
         $this->_contact_info[$ci->contactId] = $ci;
     }
 
-    /** @return Contact */
+    /** @return Contact
+     * @deprecated */
     function author_view_user() {
-        if (!$this->_author_view_user) {
-            $this->_author_view_user = Contact::make($this->conf);
-            $this->_author_view_user->set_capability("@av{$this->paperId}", true);
+        return $this->author_user();
+    }
+
+    /** @return Contact */
+    function author_user() {
+        // Return a fake user that looks like a contact for this paper, but
+        // has no special privileges
+        if (!$this->_author_user) {
+            $this->_author_user = Contact::make($this->conf);
+            $this->contact_info($this->_author_user); // contact_info must exist
         }
-        return $this->_author_view_user;
+        return $this->_author_user;
     }
 
 
     /** @return bool */
     function allow_absent() {
-        return !!$this->_allow_absent;
+        return ($this->_flags & self::ALLOW_ABSENT) !== 0;
     }
 
     /** @param bool $allow_absent */
     function set_allow_absent($allow_absent) {
         assert(!$allow_absent || $this->paperId === 0);
-        $this->_allow_absent = $allow_absent;
-    }
-
-
-    /** @return int */
-    function open_time() {
-        return $this->conf->setting("sub_open") ?? 0;
-    }
-
-    /** @return int */
-    function registration_deadline() {
-        return $this->conf->setting("sub_reg") ?? 0;
-    }
-
-    /** @return int */
-    function update_deadline() {
-        return $this->conf->setting("sub_update") ?? 0;
-    }
-
-    /** @return int */
-    function submission_deadline() {
-        return $this->conf->setting("sub_sub") ?? 0;
-    }
-
-    /** @return int */
-    function submission_grace() {
-        return $this->conf->setting("sub_grace") ?? 0;
+        $this->_flags &= ~self::ALLOW_ABSENT;
+        if ($allow_absent) {
+            $this->_flags |= self::ALLOW_ABSENT;
+        }
     }
 
     /** @return bool */
-    function can_update_until_deadline() {
-        return ($this->conf->setting("sub_freeze") ?? 0) <= 0;
+    function is_new() {
+        return ($this->_flags & self::IS_NEW) !== 0;
+    }
+
+    /** @param bool $is_new */
+    function set_is_new($is_new) {
+        $this->_flags &= ~self::IS_NEW;
+        if ($is_new) {
+            $this->_flags |= self::IS_NEW;
+        }
+    }
+
+    /** @return bool */
+    function want_submitted() {
+        if (($this->_flags & self::HAS_WANT_SUBMITTED) !== 0) {
+            return ($this->_flags & self::WANT_SUBMITTED) !== 0;
+        } else {
+            return $this->timeSubmitted > 0;
+        }
+    }
+
+    /** @param ?bool $want_submitted */
+    function set_want_submitted($want_submitted) {
+        $this->_flags &= ~(self::HAS_WANT_SUBMITTED | self::WANT_SUBMITTED);
+        if ($want_submitted !== null) {
+            $this->_flags |= self::HAS_WANT_SUBMITTED;
+        }
+        if ($want_submitted) {
+            $this->_flags |= self::WANT_SUBMITTED;
+        }
+    }
+
+
+    /** @param string $prop
+     * @return mixed */
+    function prop($prop) {
+        return $this->$prop;
+    }
+
+    /** @param string $prop
+     * @param mixed $v */
+    function set_prop($prop, $v) {
+        $this->_old_prop = $this->_old_prop ?? [];
+        if (!array_key_exists($prop, $this->_old_prop)) {
+            $this->_old_prop[$prop] = $this->$prop;
+        }
+        $this->$prop = $v;
+        // clear caches, sometimes conservatively
+        $this->_deaccents = null;
+        if ($prop === "authorInformation") {
+            $this->_author_array = $this->_ctype_array = null;
+        } else if ($prop === "collaborators") {
+            $this->_collaborator_array = null;
+        } else if ($prop === "topicIds") {
+            $this->_topic_array = $this->_topic_interest_score_array = null;
+        } else if ($prop === "allConflictType") {
+            $this->_ctype_array = null;
+        }
+    }
+
+    /** @param string $prop
+     * @param mixed $v */
+    function set_overflow_prop($prop, $v) {
+        $this->_old_prop = $this->_old_prop ?? [];
+        if (!array_key_exists("dataOverflow", $this->_old_prop)) {
+            $this->_old_prop["dataOverflow"] = $this->dataOverflow;
+        }
+        if ($v === null) {
+            unset($this->_dataOverflow[$prop]);
+        } else {
+            $this->_dataOverflow[$prop] = $v;
+        }
+        if (empty($this->_dataOverflow)) {
+            $this->dataOverflow = null;
+        } else {
+            $this->dataOverflow = json_encode_db($this->_dataOverflow);
+        }
+    }
+
+    /** @param string $prop
+     * @return mixed */
+    function base_prop($prop) {
+        if ($this->_old_prop !== null
+            && array_key_exists($prop, $this->_old_prop)) {
+            return $this->_old_prop[$prop];
+        }
+        return $this->$prop;
+    }
+
+    /** @param ?string $prop
+     * @return bool */
+    function prop_changed($prop = null) {
+        return !empty($this->_old_prop)
+            && (!$prop || array_key_exists($prop, $this->_old_prop));
+    }
+
+    function commit_prop() {
+        $this->_old_prop = null;
+    }
+
+    function abort_prop() {
+        foreach ($this->_old_prop ?? [] as $prop => $v) {
+            $this->set_prop($prop, $v);
+        }
+        if (array_key_exists("dataOverflow", $this->_old_prop ?? [])) {
+            $this->_dataOverflow = json_decode($this->_old_prop["dataOverflow"] ?? "null", true);
+        }
+        $this->_old_prop = null;
+    }
+
+
+    /** @return SubmissionRound */
+    function submission_round() {
+        if (!$this->_submission_round) {
+            foreach ($this->conf->submission_round_list() as $sr) {
+                if ($sr->unnamed || $this->has_tag($sr->tag)) {
+                    $this->_submission_round = $sr;
+                    break;
+                }
+            }
+        }
+        return $this->_submission_round;
     }
 
 
@@ -905,29 +1037,43 @@ class PaperInfo {
         return $this->conf->check_format($this->paperFormat, $check_simple ? $text : null);
     }
 
+    /** @return string */
+    function title() {
+        return $this->title;
+    }
+
     /** @return int */
     function title_format() {
         return $this->format_of($this->title, true);
     }
 
     /** @return string */
+    function abstract() {
+        return $this->_dataOverflow["abstract"] ?? $this->abstract ?? "";
+    }
+
+    /** @return string
+     * @deprecated */
     function abstract_text() {
-        if ($this->dataOverflow && isset($this->dataOverflow["abstract"])) {
-            return $this->dataOverflow["abstract"];
-        } else {
-            return $this->abstract ?? "";
-        }
+        return $this->abstract();
     }
 
     /** @return int */
     function abstract_format() {
-        return $this->format_of($this->abstract_text(), true);
+        return $this->format_of($this->abstract(), true);
     }
 
     function edit_format() {
         return $this->conf->format_info($this->paperFormat);
     }
 
+
+    /** @return string */
+    function authorInformation() {
+        // convenience method because we need abstract(), collaborators()
+        // for overflow
+        return $this->authorInformation;
+    }
 
     /** @param string $authorInformation
      * @return list<Author> */
@@ -968,126 +1114,114 @@ class PaperInfo {
         return self::search_author_list_by_email($this->author_list(), $email);
     }
 
+    /** @param int $index
+     * @return ?Author */
+    function author_by_index($index) {
+        return ($this->author_list())[$index - 1] ?? null;
+    }
 
-    /** @param bool $with_email */
-    function load_conflicts($with_email) {
-        if (!$with_email && $this->allConflictType !== null) {
-            $this->_conflict_array = [];
-            $this->_conflict_array_email = false;
-            if ($this->allConflictType !== "") {
-                foreach (explode(",", $this->allConflictType) as $x) {
-                    list($cid, $ctype) = explode(" ", $x);
-                    $cflt = new Author;
-                    $cflt->paperId = $this->paperId;
-                    $cflt->contactId = (int) $cid;
-                    $cflt->conflictType = (int) $ctype;
-                    $this->_conflict_array[$cflt->contactId] = $cflt;
-                }
-            }
-        } else if ($this->paperId === 0 && $this->_paper_creator) {
-            $cflt = new Author($this->_paper_creator);
-            $cflt->paperId = $this->paperId;
-            $cflt->contactId = $this->_paper_creator->contactId;
-            $cflt->conflictType = CONFLICT_CONTACTAUTHOR;
-            $cflt->roles = $this->_paper_creator->roles;
-            $cflt->disablement = $this->_paper_creator->disablement;
-            $cflt->collaborators = $this->_paper_creator->collaborators();
-            $this->_conflict_array = [$cflt->contactId => $cflt];
-            $this->_conflict_array_email = true;
+
+    /** @param bool $review_complete
+     * @return -1|0|1 */
+    function blindness_state($review_complete) {
+        $bs = $this->conf->submission_blindness();
+        if ($bs === Conf::BLIND_NEVER
+            || ($bs === Conf::BLIND_OPTIONAL && !$this->blind)
+            || ($bs === Conf::BLIND_UNTILREVIEW && $review_complete)) {
+            return -1; /* not blind to any reviewer */
+        } else if ($this->outcome_sign > 0
+                   && !$this->conf->setting("seedec_hideau")
+                   && $this->can_author_view_decision()) {
+            return 0;  /* not blind to reviewers who can see decision */
         } else {
+            return 1;  /* blind to any reviewer */
+        }
+    }
+
+
+    private function load_conflict_types() {
+        // load conflicts from database
+        if ($this->allConflictType === null) {
             foreach ($this->_row_set as $prow) {
-                $prow->_conflict_array = [];
-                $prow->_conflict_array_email = $with_email;
+                $prow->allConflictType = $prow->allConflictType ?? "";
             }
-            if ($with_email) {
-                $this->_load_conflicts_with_email();
-            } else {
-                $this->_load_conflicts_without_email();
+            $result = $this->conf->qe("select paperId, group_concat(contactId, ' ', conflictType) from PaperConflict force index (paperId) where paperId?a group by paperId", $this->_row_set->paper_ids());
+            while (($row = $result->fetch_row())) {
+                $this->_row_set->get((int) $row[0])->allConflictType = $row[1];
             }
+            Dbl::free($result);
         }
-    }
-
-    private function _load_conflicts_with_email() {
-        $result = $this->conf->qe("select paperId, PaperConflict.contactId, conflictType, firstName, lastName, affiliation, email, roles, disabled as disablement, collaborators from PaperConflict join ContactInfo using (contactId) where paperId?a", $this->_row_set->paper_ids());
-        while (($au = $result->fetch_object("Author"))) {
-            $au->paperId = (int) $au->paperId;
-            $au->contactId = (int) $au->contactId;
-            $au->conflictType = (int) $au->conflictType;
-            $au->roles = (int) $au->roles;
-            $au->disablement = $this->conf->disablement_for((int) $au->disablement, $au->roles);
-            $prow = $this->_row_set->get($au->paperId);
-            $prow->_conflict_array[$au->contactId] = $au;
-            if (($aux = $prow->author_by_email($au->email))) {
-                $au->author_index = $aux->author_index;
+        // parse conflicts into arrays
+        $this->_ctype_array = [];
+        if ($this->allConflictType !== "") {
+            foreach (explode(",", $this->allConflictType) as $x) {
+                list($cid, $ctype) = explode(" ", $x);
+                $this->_ctype_array[(int) $cid] = (int) $ctype;
             }
         }
-        Dbl::free($result);
     }
 
-    private function _load_conflicts_without_email() {
-        $result = $this->conf->qe("select paperId, contactId, conflictType from PaperConflict where paperId?a", $this->_row_set->paper_ids());
-        while (($au = $result->fetch_object("Author"))) {
-            $au->paperId = (int) $au->paperId;
-            $au->contactId = (int) $au->contactId;
-            $au->conflictType = (int) $au->conflictType;
-            $au->firstName = $au->lastName = $au->email = $au->affiliation = "";
-            $prow = $this->_row_set->get($au->paperId);
-            $prow->_conflict_array[$au->contactId] = $au;
+    /** @return list<PaperConflictInfo> */
+    function conflict_list() {
+        $this->_row_set->prefetch_conflict_users();
+        $cu = [];
+        foreach ($this->conflict_types() as $uid => $ctype) {
+            $u = null;
+            if ($uid > 0) {
+                $u = $this->conf->user_by_id($uid, USER_SLICE);
+            } else if ($this->_author_user !== null
+                       && $this->_author_user->contactId === $uid) {
+                $u = $this->_author_user;
+            }
+            if ($u === null) {
+                continue;
+            }
+            $auindex = null;
+            if ($u->has_email()
+                && ($au = $this->author_by_email($u->email)) !== null) {
+                $auindex = $au->author_index;
+            }
+            $cu[] = new PaperConflictInfo($u, $ctype, $auindex);
         }
-        Dbl::free($result);
+        return $cu;
     }
 
-    /** @param bool $with_email
-     * @return associative-array<int,Author> */
-    function conflicts($with_email = false) {
-        if ($this->_conflict_array === null
-            || ($with_email && !$this->_conflict_array_email)) {
-            $this->load_conflicts($with_email);
+
+    /** @return associative-array<int,int> */
+    function conflict_types() {
+        if ($this->_ctype_array === null) {
+            $this->load_conflict_types();
         }
-        return $this->_conflict_array;
+        return $this->_ctype_array;
     }
 
-    /** @param int $uid
-     * @param bool $with_email
-     * @return ?Author */
-    function conflict_by_id($uid, $with_email = false) {
-        return ($this->conflicts($with_email))[$uid] ?? null;
-    }
-
-    /** @param string $email
-     * @return ?Author */
-    function conflict_by_email($email) {
-        foreach ($this->conflicts(true) as $cflt) {
-            if (strcasecmp($cflt->email, $email) === 0)
-                return $cflt;
-        }
-        return null;
-    }
-
-    function invalidate_conflicts() {
-        $this->allConflictType = $this->_conflict_array = null;
-    }
-
-
-    /** @param Contact|int $contact
+    /** @param Contact|int $c
      * @return int */
-    function conflict_type($contact) {
-        $cid = self::contact_to_cid($contact);
+    function conflict_type($c) {
+        $this->check_rights_version();
+        $cid = is_object($c) ? $c->contactXid : $c;
         if (array_key_exists($cid, $this->_contact_info)) {
             return $this->_contact_info[$cid]->conflictType;
-        } else if (($ci = $this->conflict_by_id($cid))) {
-            return $ci->conflictType;
-        } else {
-            return 0;
         }
+        return ($this->conflict_types())[$cid] ?? 0;
     }
 
     /** @param string $email
      * @return int */
     function conflict_type_by_email($email) {
-        $cflt = $this->conflict_by_email($email);
-        return $cflt ? $cflt->conflictType : 0;
+        foreach ($this->conflict_list() as $cu) {
+            if (strcasecmp($cu->user->email, $email) === 0)
+                return $cu->conflictType;
+        }
+        return 0;
     }
+
+    function invalidate_conflicts() {
+        // XXX this does not invalidate conflict types that are loaded
+        // through the _contact_info subsystem
+        $this->allConflictType = $this->_ctype_array = null;
+    }
+
 
     /** @param Contact|int $contact
      * @return bool */
@@ -1109,11 +1243,7 @@ class PaperInfo {
 
     /** @return string */
     function collaborators() {
-        if ($this->dataOverflow && isset($this->dataOverflow["collaborators"])) {
-            return $this->dataOverflow["collaborators"];
-        } else {
-            return $this->collaborators ?? "";
-        }
+        return $this->_dataOverflow["collaborators"] ?? $this->collaborators ?? "";
     }
 
     /** @return bool */
@@ -1124,16 +1254,17 @@ class PaperInfo {
 
     /** @return string */
     function full_collaborators() {
-        if ($this->_full_collaborators === null) {
-            $s = $this->collaborators();
-            foreach ($this->conflicts(true) as $cflt) {
-                if ($cflt->conflictType >= CONFLICT_AUTHOR
-                    && ($cflt->collaborators ?? "") !== null)
-                    $s = str_ends_with($s, "\n") ? "{$s}{$cflt->collaborators}" : "{$s}\n{$cflt->collaborators}";
-            }
-            $this->_full_collaborators = $s;
+        $a = [];
+        if (($s = $this->collaborators()) !== "") {
+            $a[] = $s;
         }
-        return $this->_full_collaborators;
+        foreach ($this->conflict_list() as $cu) {
+            if ($cu->conflictType >= CONFLICT_AUTHOR
+                && ($s = $cu->user->collaborators()) !== "") {
+                $a[] = $s;
+            }
+        }
+        return join("\n", $a);
     }
 
     /** @return Generator<AuthorMatcher> */
@@ -1141,17 +1272,22 @@ class PaperInfo {
         if ($this->_collaborator_array === null) {
             $this->_collaborator_array = [];
             foreach (Contact::make_collaborator_generator($this->collaborators()) as $m) {
-                $m->paperId = $this->paperId;
                 $m->contactId = 0;
                 $m->author_index = Author::COLLABORATORS_INDEX;
                 $this->_collaborator_array[] = $m;
             }
         }
         yield from $this->_collaborator_array;
-        foreach ($this->conflicts(true) as $cflt) {
-            if ($cflt->conflictType >= CONFLICT_AUTHOR
-                && ($cflt->collaborators ?? "") !== null) {
-                yield from $this->_row_set->collaborator_matchers($cflt);
+        foreach ($this->conflict_list() as $cu) {
+            if ($cu->conflictType < CONFLICT_AUTHOR) {
+                continue;
+            }
+            foreach ($this->_row_set->collaborator_matchers($cu->user) as $m) {
+                $m = clone $m;
+                $m->contactId = $cu->contactId;
+                $m->nonauthor = true;
+                $m->author_index = $cu->author_index;
+                yield $m;
             }
         }
     }
@@ -1185,13 +1321,6 @@ class PaperInfo {
                         return true;
                     }
                     ++$nproblems;
-                    if ($co->paperId !== $this->paperId) {
-                        $co->paperId = $this->paperId;
-                        if ($co->contactId > 0) {
-                            $cox = $this->conflict_by_id($co->contactId, true);
-                            $co->author_index = $cox->author_index;
-                        }
-                    }
                     call_user_func($callback, $user, $userm, $co, $why);
                 }
             }
@@ -1228,20 +1357,31 @@ class PaperInfo {
             $cfltdesc = "<em>submission collaborator</em> " . $userm->highlight($cflt);
         } else if (($cflt->author_index ?? 0) <= 0) {
             $order = PHP_INT_MAX - 1;
-            $fromcflt = $this->conflict_by_id($cflt->contactId, true);
             $cfltdesc = "<em>contact"
-                . ($fromcflt ? " " . htmlspecialchars($fromcflt->email) : "")
+                . ($cflt->email ? " " . htmlspecialchars($cflt->email) : "")
                 . ($cflt->nonauthor ? " collaborator" : "")
                 . "</em> " . $userm->highlight($cflt);
         } else if ($cflt->nonauthor) {
             $order = $cflt->author_index | (2 << 24);
-            $cfltdesc = "<em>author #{$cflt->author_index} collaborator</em> " . $userm->highlight($cflt);
+            if (($aucflt = $this->author_by_index($cflt->author_index))) {
+                $cfltdesc = "<em>author " . $aucflt->name_h() . "’s collaborator</em> " . $userm->highlight($cflt);
+            } else {
+                error_log("#{$this->paperId}: cannot find {$cflt->author_index} " . json_encode($cflt->unparse_debug_json()) . " " . json_encode(array_map(function ($a) { return $a->unparse_debug_json(); }, $this->author_list())));
+                error_log(debug_string_backtrace());
+                $cfltdesc = "<em>author #{$cflt->author_index}’s collaborator</em> " . $userm->highlight($cflt);
+            }
         } else if ($why === AuthorMatcher::MATCH_AFFILIATION) {
             $order = $cflt->author_index | (1 << 24);
-            $cfltdesc = "<em>author #{$cflt->author_index} affiliation</em> " . $userm->highlight($cflt->affiliation);
+            if (($aucflt = $this->author_by_index($cflt->author_index))) {
+                $cfltdesc = "<em>author</em> " . $aucflt->name_h() . " (" . $userm->highlight($cflt->affiliation) . ")";
+            } else {
+                error_log("#{$this->paperId}: cannot find {$cflt->author_index}");
+                error_log(debug_string_backtrace());
+                $cfltdesc = "<em>author #{$cflt->author_index}’s affiliation</em> " . $userm->highlight($cflt->affiliation);
+            }
         } else {
             $order = $cflt->author_index;
-            $cfltdesc = "<em>author #{$cflt->author_index}</em> " . $userm->highlight($cflt->nonauthor ? $cflt : $cflt->name());
+            $cfltdesc = "<em>author</em> " . $userm->highlight($cflt);
         }
         $this->_potential_conflicts[] = [$order0, $userdesc, $order, $cfltdesc];
     }
@@ -1258,7 +1398,7 @@ class PaperInfo {
         $authors = [];
         foreach ($this->_potential_conflicts as $x) {
             if ($x[2] < PHP_INT_MAX - 2) {
-                $au = $x[2] & ((1 << 24) - 1);
+                $au = $x[2] & 0xFFFFFF;
                 $authors[$au] = "#{$au}";
             }
         }
@@ -1302,7 +1442,7 @@ class PaperInfo {
         if ($this->timeSubmitted > 0) {
             return $this->timeSubmitted;
         } else if ($this->timeWithdrawn > 0) {
-            if ($this->timeSubmitted == -100) {
+            if ($this->timeSubmitted === -100) {
                 return self::SUBMITTED_AT_FOR_WITHDRAWN;
             } else if ($this->timeSubmitted < -100) {
                 return -$this->timeSubmitted;
@@ -1318,20 +1458,21 @@ class PaperInfo {
             return $u ? [$u] : [];
         }
 
-        $chairs = true;
+        $has_track_admin = false;
         if ($this->conf->check_track_admin_sensitivity()) {
             foreach ($this->conf->track_tags() as $ttag) {
                 if ($this->conf->track_permission($ttag, Track::ADMIN)
                     && $this->has_tag($ttag)) {
-                    $chairs = false;
+                    $has_track_admin = true;
                     break;
                 }
             }
         }
 
         $as = $cas = [];
-        foreach ($chairs ? $this->conf->pc_chairs() : $this->conf->pc_members() as $u) {
-            if ($u->is_primary_administrator($this)) {
+        foreach ($this->conf->pc_members() as $u) {
+            if (($has_track_admin || $u->privChair)
+                && $u->is_primary_administrator($this)) {
                 if ($u->can_administer($this)) {
                     $as[] = $u;
                 } else {
@@ -1343,11 +1484,12 @@ class PaperInfo {
     }
 
 
-    /** @return ?string */
+    /** @param 'title'|'abstract'|'authorInformation'|'collaborators' $field
+     * @return ?string */
     private function deaccented_field($field) {
         $this->_deaccents = $this->_deaccents ?? [];
         if (!array_key_exists($field, $this->_deaccents)) {
-            $str = $this->$field ?? "";
+            $str = $this->{$field}();
             if ($str !== "" && !is_usascii($str)) {
                 $this->_deaccents[$field] = UnicodeHelper::deaccent($str);
             } else {
@@ -1358,9 +1500,10 @@ class PaperInfo {
     }
 
     /** @param TextPregexes $reg
+     * @param 'title'|'abstract'|'authorInformation'|'collaborators' $field
      * @return bool */
     function field_match_pregexes($reg, $field) {
-        return Text::match_pregexes($reg, $this->$field, $this->deaccented_field($field));
+        return Text::match_pregexes($reg, $this->{$field}(), $this->deaccented_field($field));
     }
 
 
@@ -1388,25 +1531,29 @@ class PaperInfo {
     /** @return bool */
     function can_author_view_decision() {
         return $this->outcome !== 0
-            && $this->conf->_au_seedec
-            && $this->conf->_au_seedec->test($this, null);
+            && ($this->outcome_sign === -2
+                || ($this->conf->_au_seedec
+                    && $this->conf->_au_seedec->test($this, null)));
     }
 
-    /** @return bool */
-    function can_author_edit_paper() {
-        return $this->timeWithdrawn <= 0
-            && $this->outcome_sign >= 0
-            && ($this->conf->time_edit_paper($this)
-                || $this->perm_tag_allows("author-write"));
-    }
-
-    /** @return bool */
-    function can_author_edit_final_paper() {
-        return $this->timeWithdrawn <= 0
-            && $this->outcome_sign > 0
-            && $this->can_author_view_decision()
-            && ($this->conf->time_edit_final_paper()
-                || $this->perm_tag_allows("author-write"));
+    /** @return 0|1|2 */
+    function author_edit_state() {
+        if ($this->timeWithdrawn > 0
+            || $this->outcome_sign < 0) {
+            return 0;
+        }
+        if ($this->outcome_sign > 0
+            && $this->conf->time_edit_final_paper()
+            && $this->can_author_view_decision()) {
+            return 2;
+        }
+        $sr = $this->submission_round();
+        if (($this->timeSubmitted <= 0 || !$sr->freeze)
+            && $sr->time_update(true)) {
+            return 1;
+        } else {
+            return 0;
+        }
     }
 
 
@@ -1431,10 +1578,16 @@ class PaperInfo {
         return $this->review_type($contact) > 0;
     }
 
+    /** @return int */
+    function review_status($contact) {
+        $ci = $this->contact_info($contact);
+        return $ci ? $ci->review_status : 0;
+    }
+
     /** @return bool */
     function review_not_incomplete($contact) {
-        $ci = $this->contact_info($contact);
-        return $ci && $ci->review_status > PaperContactInfo::RS_UNSUBMITTED;
+        // see also code in Contact
+        return $this->review_status($contact) > PaperContactInfo::RS_UNSUBMITTED;
     }
 
 
@@ -1453,7 +1606,7 @@ class PaperInfo {
             $this->load_tags();
         }
         return $this->paperTags !== ""
-            && stripos($this->paperTags, " $tag#") !== false;
+            && stripos($this->paperTags, " {$tag}#") !== false;
     }
 
     /** @return bool */
@@ -1463,7 +1616,7 @@ class PaperInfo {
         }
         if ($this->paperTags !== "") {
             foreach ($tags as $tag) {
-                if (stripos($this->paperTags, " $tag#") !== false)
+                if (stripos($this->paperTags, " {$tag}#") !== false)
                     return true;
             }
         }
@@ -1473,7 +1626,7 @@ class PaperInfo {
     /** @return bool */
     function has_viewable_tag($tag, Contact $user) {
         $tags = $this->viewable_tags($user);
-        return $tags !== "" && stripos(" " . $tags, " $tag#") !== false;
+        return $tags !== "" && stripos(" " . $tags, " {$tag}#") !== false;
     }
 
     /** @param string $tag
@@ -1483,20 +1636,8 @@ class PaperInfo {
             $this->load_tags();
         }
         if ($this->paperTags !== ""
-            && ($pos = stripos($this->paperTags, " $tag#")) !== false) {
+            && ($pos = stripos($this->paperTags, " {$tag}#")) !== false) {
             return (float) substr($this->paperTags, $pos + strlen($tag) + 2);
-        } else {
-            return null;
-        }
-    }
-
-    /** @param string $perm
-     * @return ?bool */
-    function perm_tag_allows($perm) {
-        if ($this->paperTags !== null
-            && $this->paperTags !== ""
-            && ($pos = stripos($this->paperTags, " perm:$perm#")) !== false) {
-            return $this->paperTags[$pos + strlen($perm) + 7] !== "-";
         } else {
             return null;
         }
@@ -1564,24 +1705,45 @@ class PaperInfo {
         return $tags;
     }
 
-    /** @param TagMessageReport $pj */
-    private function _add_override_tag_info_json($pj, $viewable, $viewable_c, Contact $user) {
-        $tagger = new Tagger($user);
-        $pj->tags = Tagger::split($viewable);
-        $pj->tags_conflicted = Tagger::split($viewable_c);
-        if (($decor = $tagger->unparse_decoration_html($viewable))) {
-            $decor_c = $tagger->unparse_decoration_html($viewable_c);
-            if ($decor !== $decor_c) {
-                $pj->tag_decoration_html = str_replace('class="tagdecoration"', 'class="tagdecoration fn5"', $decor_c)
-                    . str_replace('class="tagdecoration"', 'class="tagdecoration fx5"', $decor);
+    /** @param ?string $viewable
+     * @return string */
+    function decoration_html(Contact $user, $viewable = null, $viewable_override = null) {
+        if ($this->all_tags_text() === "" || !$this->conf->tags()->has_decoration) {
+            return "";
+        }
+        $viewable = $viewable ?? $this->sorted_viewable_tags($user);
+        if ($viewable_override === null) {
+            if ($user->has_overridable_conflict($this)) {
+                $old_overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
+                $viewable_override = $this->sorted_viewable_tags($user);
+                $user->set_overrides($old_overrides);
             } else {
-                $pj->tag_decoration_html = $decor;
+                $viewable_override = "";
             }
         }
+        $tagger = new Tagger($user);
+        $decor = $tagger->unparse_decoration_html($viewable);
+        if ($viewable_override !== "" && $viewable_override !== $viewable) {
+            $decor_override = $tagger->unparse_decoration_html($viewable_override);
+            if ($decor !== $decor_override) {
+                return str_replace('class="tagdecoration"', 'class="tagdecoration fn5"', $decor)
+                    . str_replace('class="tagdecoration"', 'class="tagdecoration fx5"', $decor_override);
+            }
+        }
+        return $decor;
+    }
+
+    /** @param TagMessageReport $pj */
+    private function _add_override_tag_info_json($pj, $viewable, $viewable_override, Contact $user) {
+        $pj->tags = Tagger::split($viewable_override);
+        $pj->tags_conflicted = Tagger::split($viewable);
+        if (($decor = $this->decoration_html($user, $viewable, $viewable_override)) !== "") {
+            $pj->tag_decoration_html = $decor;
+        }
         $tagmap = $this->conf->tags();
-        $pj->color_classes = $tagmap->color_classes($viewable);
+        $pj->color_classes = $tagmap->color_classes($viewable_override);
         if ($pj->color_classes
-            && ($color_classes_c = $tagmap->color_classes($viewable_c)) !== $pj->color_classes) {
+            && ($color_classes_c = $tagmap->color_classes($viewable)) !== $pj->color_classes) {
             $pj->color_classes_conflicted = $color_classes_c;
         }
     }
@@ -1592,21 +1754,21 @@ class PaperInfo {
         $tagger = new Tagger($user);
         $pj->tags_edit_text = $tagger->unparse($this->sorted_editable_tags($user));
         $pj->tags_view_html = $tagger->unparse_link($viewable);
-        if ($user->has_overridable_conflict($this) && $this->all_tags_text() !== "") {
+        if ($user->has_overridable_conflict($this) && $this->paperTags !== "") {
             $old_overrides = $user->set_overrides($user->overrides() ^ Contact::OVERRIDE_CONFLICT);
             $viewable2 = $this->sorted_viewable_tags($user);
             $user->set_overrides($old_overrides);
             if ($viewable !== $viewable2) {
                 if ($old_overrides & Contact::OVERRIDE_CONFLICT) {
-                    $this->_add_override_tag_info_json($pj, $viewable, $viewable2, $user);
-                } else {
                     $this->_add_override_tag_info_json($pj, $viewable2, $viewable, $user);
+                } else {
+                    $this->_add_override_tag_info_json($pj, $viewable, $viewable2, $user);
                 }
                 return;
             }
         }
         $pj->tags = Tagger::split($viewable);
-        if (($decor = $tagger->unparse_decoration_html($viewable))) {
+        if (($decor = $this->decoration_html($user, $viewable, "")) !== "") {
             $pj->tag_decoration_html = $decor;
         }
         $pj->color_classes = $this->conf->tags()->color_classes($viewable);
@@ -1637,19 +1799,19 @@ class PaperInfo {
 
     /** @return list<int> */
     function topic_list() {
-        if ($this->_topics_array === null) {
+        if ($this->_topic_array === null) {
             if ($this->topicIds === null) {
                 $this->load_topics();
             }
-            $this->_topics_array = [];
+            $this->_topic_array = [];
             if ($this->topicIds !== "") {
                 foreach (explode(",", $this->topicIds) as $t) {
-                    $this->_topics_array[] = (int) $t;
+                    $this->_topic_array[] = (int) $t;
                 }
-                $this->conf->topic_set()->sort($this->_topics_array);
+                $this->conf->topic_set()->sort($this->_topic_array);
             }
         }
-        return $this->_topics_array;
+        return $this->_topic_array;
     }
 
     /** @return array<int,string> */
@@ -1674,75 +1836,56 @@ class PaperInfo {
     /** @param int|Contact $contact
      * @return int */
     function topic_interest_score($contact) {
-        $score = 0;
         if (is_int($contact)) {
             $contact = ($this->conf->pc_members())[$contact] ?? null;
         }
-        if ($contact) {
-            if ($this->_topic_interest_score_array === null) {
-                $this->_topic_interest_score_array = [];
-            }
-            if (isset($this->_topic_interest_score_array[$contact->contactId])) {
-                $score = $this->_topic_interest_score_array[$contact->contactId];
-            } else {
-                $interests = $contact->topic_interest_map();
-                $topics = $this->topic_list();
-                foreach ($topics as $t) {
-                    if (($j = $interests[$t] ?? 0)) {
-                        if ($j >= -2 && $j <= 2) {
-                            $score += self::$topic_interest_values[$j + 2];
-                        } else if ($j > 2) {
-                            $score += sqrt($j / 2);
-                        } else {
-                            $score += -sqrt(-$j / 4);
-                        }
-                    }
+        if ($this->topicIds === "" || !$contact) {
+            return 0;
+        }
+        $this->_topic_interest_score_array = $this->_topic_interest_score_array ?? [];
+        if (array_key_exists($contact->contactId, $this->_topic_interest_score_array)) {
+            return $this->_topic_interest_score_array[$contact->contactId];
+        }
+        $score = 0;
+        $interests = $contact->topic_interest_map();
+        $topics = $this->topic_list();
+        foreach ($topics as $t) {
+            if (($j = $interests[$t] ?? 0)) {
+                if ($j >= -2 && $j <= 2) {
+                    $score += self::$topic_interest_values[$j + 2];
+                } else if ($j > 2) {
+                    $score += sqrt($j / 2);
+                } else {
+                    $score += -sqrt(-$j / 4);
                 }
-                if ($score) {
-                    // * Strong interest in the paper's single topic gets
-                    //   score 10.
-                    $score = (int) ($score / sqrt(count($topics)) * 10 + 0.5);
-                }
-                $this->_topic_interest_score_array[$contact->contactId] = $score;
             }
         }
+        if ($score) {
+            // * Strong interest in the paper's single topic gets
+            //   score 10.
+            $score = (int) ($score / sqrt(count($topics)) * 10 + 0.5);
+        }
+        $this->_topic_interest_score_array[$contact->contactId] = $score;
         return $score;
     }
 
     function invalidate_topics() {
-        $this->topicIds = $this->_topics_array = $this->_topic_interest_score_array = null;
+        $this->topicIds = $this->_topic_array = $this->_topic_interest_score_array = null;
     }
 
 
-    /** @param bool $with_email
-     * @return associative-array<int,Author> */
-    function pc_conflicts($with_email = false) {
-        return array_intersect_key($this->conflicts($with_email), $this->conf->pc_members());
-    }
-
-    /** @return associative-array<int,int> */
-    function conflict_types() {
-        $ct = [];
-        foreach ($this->conflicts() as $cflt) {
-            $ct[$cflt->contactId] = $cflt->conflictType;
+    /** @return list<Contact> */
+    function contact_list() {
+        $us = [];
+        foreach ($this->conflict_list() as $cu) {
+            if ($cu->conflictType >= CONFLICT_AUTHOR)
+                $us[] = $cu->user;
         }
-        return $ct;
-    }
-
-
-    /** @return associative-array<int,Author> */
-    function contacts($with_email = false) {
-        $c = [];
-        foreach ($this->conflicts($with_email) as $id => $cflt) {
-            if ($cflt->conflictType >= CONFLICT_AUTHOR)
-                $c[$id] = $cflt;
-        }
-        return $c;
+        return $us;
     }
 
     /** @return PaperInfoLikelyContacts */
     function likely_contacts() {
-        $contacts = $this->contacts(true);
         $lc = new PaperInfoLikelyContacts;
         $uanames = [];
         foreach ($this->author_list() as $au) {
@@ -1750,17 +1893,17 @@ class PaperInfo {
             $lc->author_cids[] = [];
             $uanames[] = trim(preg_replace('/[-\s.,;:]+/', ' ', UnicodeHelper::deaccent($au->name())));
         }
-        foreach ($contacts as $cflt) {
+        foreach ($this->contact_list() as $u) {
             $nm_full = $nm_uaname = $nm_last = $nm_email = $fulli = $uanamei = $lasti = $emaili = 0;
-            if ($cflt->email !== "") {
+            if ($u->email !== "") {
                 foreach ($lc->author_list as $i => $au) {
-                    if (strcasecmp($cflt->email, $au->email) === 0) {
+                    if (strcasecmp($u->email, $au->email) === 0) {
                         ++$nm_email;
                         $emaili = $i;
                     }
                 }
             }
-            if ($nm_email !== 1 && ($cflt_name = $cflt->name()) !== "") {
+            if ($nm_email !== 1 && ($cflt_name = $u->name()) !== "") {
                 $cflt_uaname = trim(preg_replace('/[-\s.,;:]+/', ' ', UnicodeHelper::deaccent($cflt_name)));
                 foreach ($lc->author_list as $i => $au) {
                     if (strcasecmp($cflt_name, $au->name()) === 0) {
@@ -1770,24 +1913,24 @@ class PaperInfo {
                                && strcasecmp($cflt_uaname, $uanames[$i]) === 0) {
                         ++$nm_uaname;
                         $uanamei = $i;
-                    } else if ($cflt->lastName !== ""
-                               && strcasecmp($cflt->lastName, $au->lastName) === 0) {
+                    } else if ($u->lastName !== ""
+                               && strcasecmp($u->lastName, $au->lastName) === 0) {
                         ++$nm_last;
                         $lasti = $i;
                     }
                 }
             }
             if ($nm_email === 1) {
-                $lc->author_list[$emaili]->contactId = $cflt->contactId;
-                array_unshift($lc->author_cids[$emaili], $cflt->contactId);
+                $lc->author_list[$emaili]->contactId = $u->contactId;
+                array_unshift($lc->author_cids[$emaili], $u->contactId);
             } else if ($nm_full === 1) {
-                $lc->author_cids[$fulli][] = $cflt->contactId;
+                $lc->author_cids[$fulli][] = $u->contactId;
             } else if ($nm_uaname === 1) {
-                $lc->author_cids[$uanamei][] = $cflt->contactId;
+                $lc->author_cids[$uanamei][] = $u->contactId;
             } else if ($nm_last === 1) {
-                $lc->author_cids[$lasti][] = $cflt->contactId;
+                $lc->author_cids[$lasti][] = $u->contactId;
             } else {
-                $lc->nonauthor_contacts[] = $cflt;
+                $lc->nonauthor_contacts[] = $u;
             }
         }
         return $lc;
@@ -2030,10 +2173,11 @@ class PaperInfo {
     }
 
     function override_option(PaperValue $ov) {
-        if (!isset($this->_base_option_array[$ov->id])) {
-            $this->_base_option_array[$ov->id] = $this->force_option($ov->option);
+        $id = $ov->option_id();
+        if (!isset($this->_base_option_array[$id])) {
+            $this->_base_option_array[$id] = $this->force_option($ov->option);
         }
-        $this->_option_array[$ov->id] = $ov;
+        $this->_option_array[$id] = $ov;
     }
 
     function remove_option_overrides() {
@@ -2079,7 +2223,6 @@ class PaperInfo {
      * @param int $did
      * @return ?DocumentInfo */
     function document($dtype, $did = 0, $full = false) {
-        assert(is_int($dtype)); // XXX remove later
         if ($did <= 0) {
             if ($dtype === DTYPE_SUBMISSION) {
                 $did = $this->paperStorageId;
@@ -2107,10 +2250,13 @@ class PaperInfo {
                  && $did == $this->finalPaperStorageId))
             && !$full) {
             $args = [
-                "paperStorageId" => $did, "paperId" => $this->paperId,
-                "documentType" => $dtype, "timestamp" => (int) $this->timestamp,
-                "mimetype" => $this->mimetype, "hash" => $this->sha1,
-                "size" => (int) $this->size
+                "paperStorageId" => $did,
+                "paperId" => $this->paperId,
+                "documentType" => $dtype,
+                "timestamp" => (int) $this->timestamp,
+                "mimetype" => $this->mimetype,
+                "hash" => $this->sha1,
+                "size" => $this->size ?? -1
             ];
             $infokey = $dtype === DTYPE_SUBMISSION ? "paper_infoJson" : "final_infoJson";
             if (isset($this->$infokey)) {
@@ -2143,23 +2289,24 @@ class PaperInfo {
     /** @return bool */
     function is_primary_document(DocumentInfo $doc) {
         return $doc->paperStorageId > 1
-            && (($doc->paperStorageId == $this->paperStorageId
+            && (($doc->paperStorageId === $this->paperStorageId
                  && $this->finalPaperStorageId <= 0
                  && $doc->documentType === DTYPE_SUBMISSION)
-                || ($doc->paperStorageId == $this->finalPaperStorageId
+                || ($doc->paperStorageId === $this->finalPaperStorageId
                     && $doc->documentType === DTYPE_FINAL));
     }
 
     /** @return int */
     function primary_document_size() {
         // ensure `Paper.size` exists (might not due to import bugs)
-        if ($this->size == 0
-            && $this->paperStorageId > 1
-            && ($doc = $this->primary_document())
-            && ($this->size = $doc->size()) > 0) {
-            $this->conf->qe("update Paper set size=? where paperId=? and paperStorageId=? and size=0", $this->size, $this->paperId, $this->paperStorageId);
+        if (($this->size ?? -1) < 0 && ($doc = $this->primary_document())) {
+            $this->size = $doc->size();
+            if ($this->size >= 0) {
+                $key = $doc->documentType === DTYPE_SUBMISSION ? "paperStorageId" : "finalPaperStorageId";
+                $this->conf->qe("update Paper set size=? where paperId=? and {$key}=? and size<=0", $this->size, $this->paperId, $doc->paperStorageId);
+            }
         }
-        return (int) $this->size;
+        return $this->size ?? -1;
     }
 
     /** @param int $dtype
@@ -2194,23 +2341,21 @@ class PaperInfo {
     }
 
     function pause_mark_inactive_documents() {
-        if ($this->_pause_mark_inactive_documents !== 2) {
-            $this->_pause_mark_inactive_documents = 1;
-        }
+        $this->_flags |= self::MARK_INACTIVE_PAUSE_1;
     }
 
     function resume_mark_inactive_documents() {
-        $paused = $this->_pause_mark_inactive_documents;
-        $this->_pause_mark_inactive_documents = null;
-        if ($paused === 2) {
+        $old_flags = $this->_flags;
+        $this->_flags &= ~self::MARK_INACTIVE_PAUSE;
+        if (($old_flags & self::MARK_INACTIVE_PAUSE_2) !== 0) {
             $this->mark_inactive_documents();
         }
     }
 
     function mark_inactive_documents() {
         // see also DocumentInfo::active_document_map
-        if (!$this->_pause_mark_inactive_documents) {
-            $this->_pause_mark_inactive_documents = 2;
+        if (($this->_flags & self::MARK_INACTIVE_PAUSE) === 0) {
+            $this->_flags |= self::MARK_INACTIVE_PAUSE_2;
             $dids = [];
             if ($this->paperStorageId > 1) {
                 $dids[] = $this->paperStorageId;
@@ -2224,9 +2369,9 @@ class PaperInfo {
                 }
             }
             $this->conf->qe("update PaperStorage set inactive=(paperStorageId?A) where paperId=? and documentType>=?", $dids, $this->paperId, DTYPE_FINAL);
-            $this->_pause_mark_inactive_documents = null;
+            $this->_flags &= ~self::MARK_INACTIVE_PAUSE;
         } else {
-            $this->_pause_mark_inactive_documents = 2;
+            $this->_flags |= self::MARK_INACTIVE_PAUSE_2;
         }
     }
 
@@ -2305,7 +2450,7 @@ class PaperInfo {
             && $this->_review_array === null
             && !$always) {
             $this->_review_array = [];
-            $this->_reviews_flags = 0;
+            $this->_flags &= ~self::REVIEW_FLAGS;
             $this->_reviews_have = null;
             if ($this->reviewSignatures !== "") {
                 foreach (explode(",", $this->reviewSignatures) as $rs) {
@@ -2325,8 +2470,8 @@ class PaperInfo {
         foreach ($row_set as $prow) {
             $prow->_review_array = [];
             $prow->_reviews_have = null;
-            $had |= $prow->_reviews_flags;
-            $prow->_reviews_flags = self::REVIEW_HAS_FULL;
+            $had |= $prow->_flags;
+            $prow->_flags = ($prow->_flags & ~self::REVIEW_FLAGS) | self::REVIEW_HAS_FULL;
         }
 
         $result = $this->conf->qe("select PaperReview.*, " . $this->conf->query_ratings() . " ratingSignature from PaperReview where paperId?a order by paperId, reviewId", $row_set->paper_ids());
@@ -2336,9 +2481,6 @@ class PaperInfo {
         Dbl::free($result);
 
         $this->ensure_reviewer_names_set($row_set);
-        if ($had & self::REVIEW_HAS_LASTLOGIN) {
-            $this->ensure_reviewer_last_login_set($row_set);
-        }
     }
 
     /** @return int|false */
@@ -2397,16 +2539,7 @@ class PaperInfo {
             }
         }
 
-        usort($srs, function ($a, $b) {
-            // NB: all submitted reviews have timeDisplayed
-            if ($a->timeDisplayed != $b->timeDisplayed) {
-                return $a->timeDisplayed < $b->timeDisplayed ? -1 : 1;
-            } else if ($a->reviewOrdinal && $b->reviewOrdinal) {
-                return $a->reviewOrdinal < $b->reviewOrdinal ? -1 : 1;
-            } else {
-                return $a->reviewId < $b->reviewId ? -1 : 1;
-            }
-        });
+        usort($srs, "ReviewInfo::display_compare");
 
         foreach ($urs as $urow) {
             $srs[] = $urow;
@@ -2526,18 +2659,13 @@ class PaperInfo {
 
 
     private function ensure_full_review_name() {
-        $names = [];
-        foreach ($this->_full_review ?? [] as $rrow) {
-            if (($u = $this->conf->user_by_id($rrow->contactId, USER_SLICE))) {
-                $rrow->assign_name($u, $names);
-            }
-        }
+        ReviewInfo::check_ambiguous_names($this->_full_review ?? []);
     }
 
     /** @return ?ReviewInfo */
     function full_review_by_id($id) {
         if ($this->_full_review_key === null
-            && !($this->_reviews_flags & self::REVIEW_HAS_FULL)) {
+            && ($this->_flags & self::REVIEW_HAS_FULL) === 0) {
             $this->_full_review_key = "r$id";
             $result = $this->conf->qe("select PaperReview.*, " . $this->conf->query_ratings() . " ratingSignature from PaperReview where paperId=? and reviewId=?", $this->paperId, $id);
             $rrow = ReviewInfo::fetch($result, $this, $this->conf);
@@ -2557,7 +2685,7 @@ class PaperInfo {
     function full_reviews_by_user($contact) {
         $cid = self::contact_to_cid($contact);
         if ($this->_full_review_key === null
-            && !($this->_reviews_flags & self::REVIEW_HAS_FULL)) {
+            && ($this->_flags & self::REVIEW_HAS_FULL) === 0) {
             foreach ($this->_row_set as $prow) {
                 $prow->_full_review = [];
                 $prow->_full_review_key = "u$cid";
@@ -2579,7 +2707,7 @@ class PaperInfo {
     /** @return ?ReviewInfo */
     function full_review_by_ordinal($ordinal) {
         if ($this->_full_review_key === null
-            && !($this->_reviews_flags & self::REVIEW_HAS_FULL)) {
+            && ($this->_flags & self::REVIEW_HAS_FULL) === 0) {
             $this->_full_review_key = "o$ordinal";
             $result = $this->conf->qe("select PaperReview.*, " . $this->conf->query_ratings() . " ratingSignature from PaperReview where paperId=? and reviewOrdinal=?", $this->paperId, $ordinal);
             $rrow = ReviewInfo::fetch($result, $this, $this->conf);
@@ -2608,7 +2736,7 @@ class PaperInfo {
 
     /** @return ?ReviewInfo */
     private function fresh_review_by($key, $value) {
-        $result = $this->conf->qe("select PaperReview.*, " . $this->conf->query_ratings() . " ratingSignature, ContactInfo.firstName, ContactInfo.lastName, ContactInfo.affiliation, ContactInfo.email, ContactInfo.roles, ContactInfo.contactTags from PaperReview join ContactInfo using (contactId) where paperId=? and $key=? order by paperId, reviewId", $this->paperId, $value);
+        $result = $this->conf->qe("select PaperReview.*, " . $this->conf->query_ratings() . " ratingSignature from PaperReview where paperId=? and {$key}=? order by paperId, reviewId", $this->paperId, $value);
         $rrow = ReviewInfo::fetch($result, $this, $this->conf);
         Dbl::free($result);
         return $rrow;
@@ -2641,10 +2769,11 @@ class PaperInfo {
         return $cinfo->vreviews_array;
     }
 
-    /** @return bool */
+    /** @param int $cid
+     * @return bool */
     function can_view_review_identity_of($cid, Contact $viewer) {
         if ($viewer->can_administer_for_track($this, Track::VIEWREVID)
-            || $cid == $viewer->contactId) {
+            || $cid === $viewer->contactId) {
             return true;
         }
         foreach ($this->reviews_by_user($cid) as $rrow) {
@@ -2669,7 +2798,7 @@ class PaperInfo {
     }
 
     function ensure_full_reviews() {
-        if (!($this->_reviews_flags & self::REVIEW_HAS_FULL)) {
+        if (($this->_flags & self::REVIEW_HAS_FULL) === 0) {
             $this->load_reviews(true);
         }
     }
@@ -2682,49 +2811,16 @@ class PaperInfo {
             }
         }
         foreach ($row_set as $prow) {
-            $prow->_reviews_flags |= self::REVIEW_HAS_NAMES;
-            $names = [];
-            foreach ($prow->all_reviews() as $rrow) {
-                if (($u = $this->conf->user_by_id($rrow->contactId, USER_SLICE))) {
-                    $rrow->assign_name($u, $names);
-                }
-            }
+            $prow->_flags |= self::REVIEW_HAS_NAMES;
+            ReviewInfo::check_ambiguous_names(array_values($prow->all_reviews()));
         }
     }
 
     function ensure_reviewer_names() {
         $this->ensure_reviews();
         if (!empty($this->_review_array)
-            && !($this->_reviews_flags & self::REVIEW_HAS_NAMES)) {
+            && ($this->_flags & self::REVIEW_HAS_NAMES) === 0) {
             $this->ensure_reviewer_names_set($this->_row_set);
-        }
-    }
-
-    /** @param PaperInfoSet $row_set */
-    private function ensure_reviewer_last_login_set($row_set) {
-        $users = [];
-        foreach ($row_set as $prow) {
-            $prow->_reviews_flags |= self::REVIEW_HAS_LASTLOGIN;
-            foreach ($prow->all_reviews() as $rrow) {
-                $users[$rrow->contactId] = true;
-            }
-        }
-        if (!empty($users)) {
-            $result = $this->conf->qe("select contactId, lastLogin from ContactInfo where contactId?a", array_keys($users));
-            $lastLogins = Dbl::fetch_iimap($result);
-            foreach ($row_set as $prow) {
-                foreach ($prow->all_reviews() as $rrow) {
-                    $rrow->lastLogin = $lastLogins[$rrow->contactId];
-                }
-            }
-        }
-    }
-
-    function ensure_reviewer_last_login() {
-        $this->ensure_reviews();
-        if (!empty($this->_review_array)
-            && !($this->_reviews_flags & self::REVIEW_HAS_LASTLOGIN)) {
-            $this->ensure_reviewer_last_login_set($this->_row_set);
         }
     }
 
@@ -2736,9 +2832,9 @@ class PaperInfo {
         foreach ($this->_row_set as $prow) {
             $prow->$k = "";
         }
-        $select = $maybe_null ? "coalesce($main_storage,'.')" : $main_storage;
-        $result = $this->conf->qe("select paperId, group_concat($select order by reviewId) from PaperReview where paperId?a group by paperId", $this->_row_set->paper_ids());
-        while ($result && ($row = $result->fetch_row())) {
+        $select = $maybe_null ? "coalesce({$main_storage},'.')" : $main_storage;
+        $result = $this->conf->qe("select paperId, group_concat({$select} order by reviewId) from PaperReview where paperId?a group by paperId", $this->_row_set->paper_ids());
+        while (($row = $result->fetch_row())) {
             $prow = $this->_row_set->get((int) $row[0]);
             $prow->$k = $row[1];
         }
@@ -2747,38 +2843,28 @@ class PaperInfo {
 
     /** @param int $order */
     function ensure_review_field_order($order) {
-        if (!($this->_reviews_flags & self::REVIEW_HAS_FULL)
-            && ($this->_reviews_have[$order] ?? null) === null) {
-            $rform = $this->conf->review_form();
-            if ($this->_reviews_have === null) {
-                $this->_reviews_have = $rform->order_array(null);
-            }
-            $f = $rform->field_by_order($order);
-            if (!$f) {
-                $this->_reviews_have[$order] = false;
-            } else if (!$f->main_storage) {
-                $this->ensure_full_reviews();
-            } else {
-                $this->_reviews_have[$order] = true;
-                $k = $f->short_id . "Signature";
-                if ($this->$k === null) {
-                    $this->load_review_fields($f->short_id, $f->main_storage, false);
-                }
-                $x = explode(",", $this->$k);
-                foreach ($this->reviews_as_list() as $i => $rrow) {
-                    $rrow->fields[$order] = (int) $x[$i];
-                }
-            }
+        if (($this->_flags & self::REVIEW_HAS_FULL) !== 0
+            || ($this->_reviews_have[$order] ?? null) !== null) {
+            return;
         }
-    }
-
-    /** @param string|ReviewField $field
-     * @deprecated */
-    function ensure_review_score($field) {
-        if (!($this->_reviews_flags & self::REVIEW_HAS_FULL)) {
-            $f = is_string($field) ? $this->conf->review_field($field) : $field;
-            if ($f && $f->order) {
-                $this->ensure_review_field_order($f->order);
+        $rform = $this->conf->review_form();
+        $this->_reviews_have = $this->_reviews_have ?? $rform->order_array(null);
+        $f = $rform->field_by_order($order);
+        if (!$f) {
+            $this->_reviews_have[$order] = false;
+        } else if (!$f->main_storage) {
+            $this->ensure_full_reviews();
+        } else {
+            $this->_reviews_have[$order] = true;
+            $k = $f->short_id . "Signature";
+            if ($this->$k === null) {
+                $this->load_review_fields($f->short_id, $f->main_storage, false);
+            }
+            $x = explode(",", $this->$k);
+            foreach ($this->reviews_as_list() as $i => $rrow) {
+                $rrow->fields = $rrow->fields ?? $rform->order_array(null);
+                $fv = (int) $x[$i];
+                $rrow->fields[$order] = $fv > 0 ? $fv : ($fv < 0 ? 0 : null);
             }
         }
     }
@@ -2812,8 +2898,8 @@ class PaperInfo {
     }
 
     function ensure_review_word_counts() {
-        if (!($this->_reviews_flags & self::REVIEW_HAS_WORDCOUNT)) {
-            $this->_reviews_flags |= self::REVIEW_HAS_WORDCOUNT;
+        if (($this->_flags & self::REVIEW_HAS_WORDCOUNT) === 0) {
+            $this->_flags |= self::REVIEW_HAS_WORDCOUNT;
             if ($this->reviewWordCountSignature === null) {
                 $this->load_review_fields("reviewWordCount", "reviewWordCount", true);
             }
@@ -2899,7 +2985,7 @@ class PaperInfo {
         }
 
         $result = $this->conf->qe("select * from ReviewRequest where paperId?a", $row_set->paper_ids());
-        while (($ref = ReviewRequestInfo::fetch($result))) {
+        while (($ref = ReviewRequestInfo::fetch($result, $this->conf))) {
             $prow = $row_set->get($ref->paperId);
             $prow->_request_array[] = $ref;
         }
@@ -2926,7 +3012,7 @@ class PaperInfo {
         }
 
         $result = $this->conf->qe("select * from PaperReviewRefused where paperId?a", $row_set->paper_ids());
-        while (($ref = ReviewRefusalInfo::fetch($result))) {
+        while (($ref = ReviewRefusalInfo::fetch($result, $this->conf))) {
             $prow = $row_set->get($ref->paperId);
             $prow->_refusal_array[] = $ref;
         }
@@ -3216,7 +3302,9 @@ class PaperInfo {
     /** @param Contact $a
      * @param Contact $b */
     function notify_user_compare($a, $b) {
-        // group authors together, then reviewers
+        // first, authors by position in author list;
+        // then, reviewers by display order;
+        // then others
         $aa = $this->has_author($a);
         $ba = $this->has_author($b);
         if ($aa && $ba) {
@@ -3227,68 +3315,87 @@ class PaperInfo {
             if ($aia !== $aib) {
                 return $aia < $aib ? -1 : 1;
             }
-        } else if (!$aa && !$ba) {
-            $aa = $this->has_reviewer($a);
-            $ba = $this->has_reviewer($b);
-        }
-        if ($aa !== $ba) {
+        } else if ($aa || $ba) {
             return $aa ? -1 : 1;
         } else {
-            return call_user_func($a->conf->user_comparator(), $a, $b);
+            $ar = $this->review_by_user($a);
+            $br = $this->review_by_user($b);
+            if ($ar && $br) {
+                $arc = ReviewInfo::display_compare($ar, $br);
+                if ($arc !== 0) {
+                    return $arc;
+                }
+            } else if ($ar || $br) {
+                return $ar ? -1 : 1;
+            }
         }
+        return call_user_func($a->conf->user_comparator(), $a, $b);
     }
 
     /** @param list<int> $cids
      * @param string $clause
-     * @param ?string $fn
      * @return list<Contact> */
-    function generic_followers($cids, $clause, $fn) {
-        $result = $this->conf->qe("select contactId, firstName, lastName, affiliation, email, preferredEmail, password, roles, contactTags, disabled, primaryContactId, defaultWatch from ContactInfo where (contactId?a or ($clause)) and not disabled", $cids);
-        $watchers = [];
+    function generic_followers($cids, $clause) {
+        $result = $this->conf->qe("select contactId, firstName, lastName, affiliation, email, preferredEmail, password, roles, contactTags, disabled, primaryContactId, defaultWatch from ContactInfo where (contactId?a or ({$clause})) and not disabled", $cids);
+        $us = [];
         while (($minic = Contact::fetch($result, $this->conf))) {
-            if ($minic->can_view_paper($this)
-                && (!$fn || $minic->$fn($this))) {
-                $watchers[] = $minic;
-            }
+            if ($minic->can_view_paper($this))
+                $us[] = $minic;
         }
         Dbl::free($result);
-        usort($watchers, [$this, "notify_user_compare"]);
-        return $watchers;
+        usort($us, [$this, "notify_user_compare"]);
+        return $us;
     }
 
     /** @return list<Contact> */
     function contact_followers() {
         $cids = [];
-        foreach ($this->conflicts() as $cflt) {
-            if ($cflt->conflictType >= CONFLICT_AUTHOR)
-                $cids[] = $cflt->contactId;
+        foreach ($this->conflict_types() as $uid => $ctype) {
+            if ($ctype >= CONFLICT_AUTHOR)
+                $cids[] = $uid;
         }
-        return $this->generic_followers($cids, "false", null);
+        return $this->generic_followers($cids, "false");
     }
 
     /** @return list<Contact> */
     function submission_followers() {
-        $fl = ($this->anno["is_new"] ?? false ? Contact::WATCH_PAPER_REGISTER_ALL : 0)
+        $fl = ($this->is_new() ? Contact::WATCH_PAPER_REGISTER_ALL : 0)
             | ($this->timeSubmitted > 0 ? Contact::WATCH_PAPER_NEWSUBMIT_ALL : 0);
-        return $this->generic_followers([], "(defaultWatch&{$fl})!=0 and roles!=0", "following_submission");
+        $us = [];
+        foreach ($this->generic_followers([], "(defaultWatch&{$fl})!=0 and roles!=0") as $u) {
+            if ($u->following_submission($this))
+                $us[] = $u;
+        }
+        return $us;
     }
 
     /** @return list<Contact> */
     function late_withdrawal_followers() {
-        return $this->generic_followers([], "(defaultWatch&" . Contact::WATCH_LATE_WITHDRAWAL_ALL . ")!=0 and roles!=0", "following_late_withdrawal");
+        $us = [];
+        foreach ($this->generic_followers([], "(defaultWatch&" . Contact::WATCH_LATE_WITHDRAWAL_ALL . ")!=0 and roles!=0") as $u) {
+            if ($u->following_late_withdrawal($this))
+                $us[] = $u;
+        }
+        return $us;
     }
 
     /** @return list<Contact> */
     function final_update_followers() {
-        return $this->generic_followers([], "(defaultWatch&" . Contact::WATCH_FINAL_UPDATE_ALL . ")!=0 and roles!=0", "following_final_update");
+        $us = [];
+        foreach ($this->generic_followers([], "(defaultWatch&" . Contact::WATCH_FINAL_UPDATE_ALL . ")!=0 and roles!=0") as $u) {
+            if ($u->following_final_update($this))
+                $us[] = $u;
+        }
+        return $us;
     }
 
-    /** @return list<Contact> */
-    function review_followers() {
+    /** @param int $topic
+     * @return list<Contact> */
+    function review_followers($topic) {
         $cids = [];
-        foreach ($this->conflicts() as $cflt) {
-            if ($cflt->conflictType >= CONFLICT_AUTHOR)
-                $cids[] = $cflt->contactId;
+        foreach ($this->conflict_types() as $uid => $ctype) {
+            if ($ctype >= CONFLICT_AUTHOR)
+                $cids[] = $uid;
         }
         foreach ($this->all_reviews() as $rrow) {
             $cids[] = $rrow->contactId;
@@ -3300,7 +3407,12 @@ class PaperInfo {
             if (($w & Contact::WATCH_REVIEW) !== 0)
                 $cids[] = $cid;
         }
-        return $this->generic_followers($cids, "(defaultWatch&" . (Contact::WATCH_REVIEW_ALL | Contact::WATCH_REVIEW_MANAGED) . ")!=0 and roles!=0", "following_reviews");
+        $us = [];
+        foreach ($this->generic_followers($cids, "(defaultWatch&" . (Contact::WATCH_REVIEW_ALL | Contact::WATCH_REVIEW_MANAGED) . ")!=0 and roles!=0") as $u) {
+            if ($u->following_reviews($this, $topic))
+                $us[] = $u;
+        }
+        return $us;
     }
 
     function delete_from_database(Contact $user = null) {
@@ -3312,7 +3424,7 @@ class PaperInfo {
 
         $qs = [];
         foreach (["PaperWatch", "PaperReviewPreference", "PaperReviewRefused", "ReviewRequest", "PaperTag", "PaperComment", "PaperReview", "PaperTopic", "PaperOption", "PaperConflict", "Paper", "PaperStorage", "Capability"] as $table) {
-            $qs[] = "delete from $table where paperId={$this->paperId}";
+            $qs[] = "delete from {$table} where paperId={$this->paperId}";
         }
         $mresult = Dbl::multi_qe($this->conf->dblink, join(";", $qs));
         $mresult->free_all();
@@ -3347,7 +3459,7 @@ class PaperInfoLikelyContacts implements JsonSerializable {
     public $author_list = [];
     /** @var list<list<int>> */
     public $author_cids = [];
-    /** @var list<Author> */
+    /** @var list<Contact> */
     public $nonauthor_contacts = [];
 
     #[\ReturnTypeWillChange]
@@ -3355,14 +3467,14 @@ class PaperInfoLikelyContacts implements JsonSerializable {
     function jsonSerialize() {
         $x = ["author_list" => [], "author_cids" => $this->author_cids];
         foreach ($this->author_list as $au) {
-            $j = (object) $au->unparse_nae_json();
+            $j = (object) $au->unparse_nea_json();
             if ($au->contactId > 0) {
                 $j->contactId = $au->contactId;
             }
             $x["author_list"][] = $j;
         }
         foreach ($this->nonauthor_contacts as $au) {
-            $j = (object) $au->unparse_nae_json();
+            $j = (object) Author::unparse_nea_json_for($au);
             $j->contactId = $au->contactId;
             $x["nonauthor_contacts"][] = $j;
         }

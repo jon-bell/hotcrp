@@ -1,6 +1,6 @@
 <?php
 // init.php -- HotCRP initialization (test or site)
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 declare(strict_types=1);
 const HOTCRP_VERSION = "3.0b3";
@@ -64,7 +64,6 @@ require_once(SiteLoader::find("lib/navigation.php"));
 require_once(SiteLoader::find("lib/polyfills.php"));
 require_once(SiteLoader::find("lib/base.php"));
 require_once(SiteLoader::find("lib/redirect.php"));
-mysqli_report(MYSQLI_REPORT_OFF);
 require_once(SiteLoader::find("lib/dbl.php"));
 require_once(SiteLoader::find("src/helpers.php"));
 require_once(SiteLoader::find("src/conference.php"));
@@ -75,7 +74,10 @@ if (defined("HOTCRP_TESTHARNESS")) {
 }
 if (PHP_SAPI === "cli") {
     set_exception_handler("Multiconference::batch_exception_handler");
-    pcntl_signal(SIGPIPE, SIG_DFL);
+    ini_set("error_log", "");
+    if (function_exists("pcntl_signal")) {
+        pcntl_signal(SIGPIPE, SIG_DFL);
+    }
 }
 
 
@@ -195,11 +197,12 @@ function initialize_conf($config_file = null, $confid = null) {
 }
 
 
-/** @param NavigationState $nav
+/** @param Qrequest $qreq
  * @param int $uindex
  * @param int $nusers
  * @param bool $cookie */
-function initialize_user_redirect($nav, $uindex, $nusers, $cookie) {
+function initialize_user_redirect($qreq, $uindex, $nusers, $cookie) {
+    $nav = $qreq->navigation();
     if ($nav->page === "api") {
         if ($nusers === 0) {
             $jr = JsonResult::make_error(401, "<0>You have been signed out");
@@ -207,21 +210,45 @@ function initialize_user_redirect($nav, $uindex, $nusers, $cookie) {
             $jr = JsonResult::make_error(400, "<0>Bad user specification");
         }
         $jr->complete();
-    } else if ($_SERVER["REQUEST_METHOD"] === "GET" || $_SERVER["REQUEST_METHOD"] === "HEAD") {
+    } else if ($qreq->is_get() || $qreq->is_head()) {
         $page = $nav->base_absolute();
         if ($nusers > 0) {
-            $page = "{$page}u/$uindex/";
+            $page = "{$page}u/{$uindex}/";
         }
         if ($nav->page !== "index" || $nav->path !== "") {
             $page = "{$page}{$nav->page}{$nav->php_suffix}{$nav->path}";
         }
         $page .= $nav->query;
         if ($cookie) {
-            Conf::$main->set_cookie("hc-uredirect-" . Conf::$now, $page, Conf::$now + 20);
+            $qreq->set_cookie("hc-uredirect-" . Conf::$now, $page, Conf::$now + 20);
         }
         Navigation::redirect_absolute($page);
     } else {
         Conf::$main->error_msg("<0>You have been signed out from this account");
+    }
+}
+
+/** @param Qrequest $qreq
+ * @param int $uindex */
+function initialize_user_preferred_uindex($qreq, $uindex) {
+    $qs = $qreq->qsession();
+    $uchoice = [];
+    foreach ($qs->get("uchoice") ?? [] as $k => $v) {
+        if ($v[1] + 5184000 /* 60 days */ > Conf::$now) {
+            $uchoice[$k] = $v;
+        }
+    }
+    if (($skey = $qreq->conf()->session_key)) {
+        if ($uindex === 0) {
+            unset($uchoice[$skey]);
+        } else {
+            $uchoice[$skey] = [$uindex, Conf::$now];
+        }
+    }
+    if (empty($uchoice)) {
+        $qs->unset("uchoice");
+    } else {
+        $qs->set("uchoice", $uchoice);
     }
 }
 
@@ -237,8 +264,10 @@ function initialize_request($kwarg = null) {
         $nav->set_php_suffix($php_suffix);
     }
 
-    // maybe redirect to https
-    if ($conf->opt("redirectToHttps")) {
+    // maybe redirect to base or to https
+    if ($nav->above_base) {
+        Navigation::redirect_absolute($nav->self());
+    } else if ($conf->opt("redirectToHttps") && $nav->protocol === "http://") {
         $nav->redirect_http_to_https($conf->opt("allowLocalHttp"));
     }
 
@@ -312,36 +341,35 @@ function initialize_request($kwarg = null) {
     }
     $qreq->qsession()->maybe_open();
 
-    // upgrade session format
-    if (!$qreq->has_gsession("u") && $qreq->has_gsession("trueuser")) {
-        $qreq->set_gsession("u", $qreq->gsession("trueuser")->email);
-        $qreq->unset_gsession("trueuser");
-    }
-
     // determine user
     $trueemail = $qreq->gsession("u");
     $userset = $qreq->gsession("us") ?? ($trueemail ? [$trueemail] : []);
-    $usercount = count($userset);
     '@phan-var list<string> $userset';
+    $usercount = count($userset);
+    $reqemail = $_GET["i"] ?? null;
 
     $uindex = 0;
     if ($nav->shifted_path === "") {
-        $wantemail = $_GET["i"] ?? $trueemail;
-        while ($wantemail !== null
-               && $uindex < $usercount
-               && strcasecmp($userset[$uindex], $wantemail) !== 0) {
-            ++$uindex;
+        if ($reqemail !== null) {
+            while ($uindex !== $usercount
+                   && strcasecmp($userset[$uindex], $reqemail) !== 0) {
+                ++$uindex;
+            }
+        } else if (($sinfo = $qreq->qsession()->get2("uchoice", $conf->session_key))
+                   && $sinfo[1] + 5184000 /* 60 days */ > Conf::$now) {
+            $uindex = $sinfo[0];
+            initialize_user_preferred_uindex($qreq, $uindex);
         }
         if ($uindex < $usercount
-            && ($usercount > 1 || isset($_GET["i"]))
+            && ($usercount > 1 || $reqemail !== null)
             && $nav->page !== "api"
-            && ($_SERVER["REQUEST_METHOD"] === "GET" || $_SERVER["REQUEST_METHOD"] === "HEAD")) {
+            && ($qreq->method() === "GET" || $qreq->method() === "HEAD")) {
             // redirect to `/u` version
-            $nav->query = preg_replace('/[?&]i=[^&]+(?=&|\z)/', '', $nav->query);
+            $nav->query = preg_replace('/[?&;]i=[^&;]++/', '', $nav->query);
             if (str_starts_with($nav->query, "&")) {
                 $nav->query = "?" . substr($nav->query, 1);
             }
-            initialize_user_redirect($nav, $uindex, count($userset), !isset($_GET["i"]));
+            initialize_user_redirect($qreq, $uindex, count($userset), !isset($_GET["i"]));
         }
     } else if (str_starts_with($nav->shifted_path, "u/")) {
         $uindex = $usercount === 0 ? -1 : (int) substr($nav->shifted_path, 2);
@@ -349,13 +377,22 @@ function initialize_request($kwarg = null) {
     if ($uindex >= 0 && $uindex < $usercount) {
         $trueemail = $userset[$uindex];
     } else if ($uindex !== 0) {
-        initialize_user_redirect($nav, 0, $usercount, false);
+        initialize_user_redirect($qreq, 0, $usercount, false);
     }
 
-    if (isset($_GET["i"])
+    if ($reqemail !== null
         && $trueemail
-        && strcasecmp($_GET["i"], $trueemail) !== 0) {
-        $conf->error_msg("<5>You are signed in as " . htmlspecialchars($trueemail) . ", not " . htmlspecialchars($_GET["i"]) . ". <a href=\"" . $conf->hoturl("signin", ["email" => $_GET["i"]]) . "\">Sign in</a>");
+        && strcasecmp($reqemail, $trueemail) !== 0) {
+        $conf->error_msg("<5>You are signed in as " . htmlspecialchars($trueemail) . ", not " . htmlspecialchars($reqemail) . ". <a href=\"" . $conf->hoturl("signin", ["email" => $reqemail]) . "\">Sign in</a>");
+    }
+
+    // potentially mark preferred user index for this conference
+    // (garbage collect after 60 days)
+    if ($usercount > 1
+        && ($referrer = $_SERVER["HTTP_REFERER"] ?? null) !== null
+        && str_starts_with($referrer, $nav->server . $nav->base_path)
+        && str_ends_with($referrer, $nav->raw_page . $nav->path . $nav->query)) {
+        initialize_user_preferred_uindex($qreq, $uindex);
     }
 
     // look up and activate user
@@ -363,7 +400,7 @@ function initialize_request($kwarg = null) {
     if (!$muser) {
         $muser = Contact::make_email($conf, $trueemail);
     }
-    $muser = $muser->activate($qreq, true);
+    $muser = $muser->activate($qreq, true, $uindex);
     Contact::set_main_user($muser);
     $qreq->set_user($muser);
 

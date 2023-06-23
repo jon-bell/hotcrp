@@ -1,6 +1,6 @@
 <?php
 // assignmentset.php -- HotCRP helper classes for assignments
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Assignable {
     /** @var string */
@@ -25,11 +25,13 @@ class Assignable {
 }
 
 class AssignmentItem implements ArrayAccess, JsonSerializable {
-    /** @var Assignable */
+    /** @var Assignable
+     * @readonly */
     public $before;
     /** @var ?Assignable */
     public $after;
-    /** @var bool */
+    /** @var bool
+     * @readonly */
     public $existed;
     /** @var bool */
     public $deleted = false;
@@ -40,6 +42,10 @@ class AssignmentItem implements ArrayAccess, JsonSerializable {
     function __construct($before, $existed) {
         $this->before = $before;
         $this->existed = $existed;
+    }
+    /** @return string */
+    function type() {
+        return $this->before->type;
     }
     /** @return int */
     function pid() {
@@ -155,8 +161,10 @@ class AssignmentState extends MessageSet {
     public $reviewer; // default contact
     /** @var int */
     public $overrides = 0;
+    /** @var bool */
+    public $csv_context = false;
     /** @var int */
-    public $flags = 0;
+    public $potential_conflict_warnings = 0;
     /** @var AssignerContacts */
     private $cmap;
     /** @var ?array<int,Contact> */
@@ -181,8 +189,6 @@ class AssignmentState extends MessageSet {
     public $has_user_error = false;
     /** @var array<string,AssignmentPreapplyFunction> */
     private $preapply_functions = [];
-
-    const FLAG_CSV_CONTEXT = 1;
 
     function __construct(Contact $user) {
         $this->conf = $user->conf;
@@ -265,6 +271,9 @@ class AssignmentState extends MessageSet {
     function load($x) {
         $st = $this->pidstate($x->pid);
         $k = $this->extract_key($x);
+        if (!$k || isset($st->items[$k])) { // XXXX
+            error_log(json_encode($k) . " / " . debug_string_backtrace());
+        }
         assert($k && !isset($st->items[$k]));
         $st->items[$k] = new AssignmentItem($x, true);
     }
@@ -544,9 +553,6 @@ class AssignerContacts {
     private $has_pc = false;
     /** @var string
      * @readonly */
-    static public $query = "ContactInfo.contactId, firstName, lastName, email, affiliation, collaborators, roles, contactTags, primaryContactId";
-    /** @var string
-     * @readonly */
     static public $cdb_query = "contactDbId, firstName, lastName, email, affiliation, collaborators, 0 roles, '' contactTags, 0 primaryContactId";
 
     function __construct(Conf $conf, Contact $viewer) {
@@ -559,6 +565,11 @@ class AssignerContacts {
         }
         $this->conf->ensure_cached_user_collaborators();
         $this->by_id[0] = Contact::make($conf);
+    }
+
+    /** @return string */
+    static function user_query_fields() {
+        return "ContactInfo." . Conf::user_query_fields(Contact::SLICE_MINIMAL & ~Contact::SLICE_NO_COLLABORATORS);
     }
 
     /** @return Contact */
@@ -599,7 +610,7 @@ class AssignerContacts {
         if (($u = $this->by_id[$cid] ?? null)) {
             return $u;
         }
-        $result = $this->conf->qe("select " . self::$query . " from ContactInfo where contactId=?", $cid);
+        $result = $this->conf->qe("select " . self::user_query_fields() . " from ContactInfo where contactId=?", $cid);
         $u = Contact::fetch($result, $this->conf)
             ?? Contact::make_keyed($this->conf, ["email" => "unknown contact $cid", "contactId" => $cid]);
         Dbl::free($result);
@@ -620,7 +631,7 @@ class AssignerContacts {
         if (($c = $this->by_lemail[$lemail] ?? null)) {
             return $c;
         }
-        $result = $this->conf->qe("select " . self::$query . " from ContactInfo where email=?", $lemail);
+        $result = $this->conf->qe("select " . self::user_query_fields() . " from ContactInfo where email=?", $lemail);
         $c = Contact::fetch($result, $this->conf);
         Dbl::free($result);
         if (!$c && $create) {
@@ -658,7 +669,7 @@ class AssignerContacts {
     /** @return array<int,Contact> */
     function reviewer_users($pids) {
         $rset = $this->pc_users();
-        $result = $this->conf->qe("select " . AssignerContacts::$query . " from ContactInfo join PaperReview using (contactId) where (roles&" . Contact::ROLE_PC . ")=0 and paperId?a and reviewType>0 group by ContactInfo.contactId", $pids);
+        $result = $this->conf->qe("select " . AssignerContacts::user_query_fields() . " from ContactInfo join PaperReview using (contactId) where (roles&" . Contact::ROLE_PC . ")=0 and paperId?a and reviewType>0 group by ContactInfo.contactId", $pids);
         while ($result && ($c = Contact::fetch($result, $this->conf))) {
             $rset[$c->contactId] = $this->store($c);
         }
@@ -988,6 +999,12 @@ class AssignmentSet {
     /** @var Contact
      * @readonly */
     public $user;
+    /** @var string */
+    private $search_type = "s";
+    /** @var ?array<int,true> */
+    private $enabled_pids;
+    /** @var ?array<string,true> */
+    private $enabled_actions;
     /** @var int */
     private $request_count = 0;
     /** @var list<callable> */
@@ -996,18 +1013,12 @@ class AssignmentSet {
     private $assigners = [];
     /** @var array<int,int> */
     private $assigners_pidhead = [];
-    /** @var ?array<int,true> */
-    private $enabled_pids;
-    /** @var ?array<string,true> */
-    private $enabled_actions;
     /** @var AssignmentState */
     private $astate;
     /** @var array<string,list<int>> */
     private $searches = [];
     /** @var array<string,list<MessageItem>> */
     private $search_messages = [];
-    /** @var string */
-    private $search_type = "s";
     /** @var ?string */
     private $unparse_search;
     /** @var array<string,bool> */
@@ -1054,10 +1065,14 @@ class AssignmentSet {
         $this->astate->overrides = (int) $overrides;
         return $this;
     }
-    /** @param int $flags
+    /** @return $this */
+    function override_conflicts() {
+        return $this->set_overrides($this->user->overrides() | Contact::OVERRIDE_CONFLICT);
+    }
+    /** @param bool $csv_context
      * @return $this */
-    function set_flags($flags) {
-        $this->astate->flags = $flags;
+    function set_csv_context($csv_context) {
+        $this->astate->csv_context = $csv_context;
         return $this;
     }
 
@@ -1155,7 +1170,7 @@ class AssignmentSet {
             }
             $this->conf->feedback_msg($this->astate->message_list());
         } else if (empty($this->assigners)) {
-            $this->conf->feedback_msg([new MessageItem(null, "<0>No changes", 1)]);
+            $this->conf->feedback_msg([new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE)]);
         }
     }
     /** @return JsonResult */
@@ -1349,6 +1364,7 @@ class AssignmentSet {
                   ["preference", "pref", "revpref"],
                   ["expertise", "prefexp"],
                   ["tag_value", "tagvalue", "value", "index"],
+                  ["new_tag", "newtag"],
                   ["conflict", "conflict_type", "conflicttype"],
                   ["withdraw_reason", "reason"]] as $ks) {
             for ($i = 1; $i < count($ks) && !$csv->has_column($ks[0]); ++$i) {
@@ -1414,10 +1430,10 @@ class AssignmentSet {
 
     /** @param string $line */
     function parse_csv_comment($line) {
-        if (preg_match('/\A#\s*hotcrp_assign_display_search\s*(\S.*)\s*\z/', $line, $m)) {
+        if (preg_match('/\A###\s*hotcrp_assign_display_search\s*(\S.*)\s*\z/', $line, $m)) {
             $this->unparse_search = $m[1];
         }
-        if (preg_match('/\A#\s*hotcrp_assign_show\s+(\w+)\s*\z/', $line, $m)) {
+        if (preg_match('/\A###\s*hotcrp_assign_show\s+(\w+)\s*\z/', $line, $m)) {
             $this->show_column($m[1]);
         }
     }
@@ -1447,7 +1463,7 @@ class AssignmentSet {
         } else {
             if (!isset($this->searches[$pfield])) {
                 $search = new PaperSearch($this->user, ["q" => $pfield, "t" => $this->search_type, "reviewer" => $this->astate->reviewer]);
-                $this->searches[$pfield] = $search->paper_ids();
+                $this->searches[$pfield] = $search->sorted_paper_ids();
                 if ($search->has_problem()) {
                     $this->search_messages[$pfield] = $search->message_list();
                 }
@@ -1647,7 +1663,7 @@ class AssignmentSet {
             assert($filename === null || $csv->filename() === $filename);
         } else {
             $csv = new CsvParser($text, CsvParser::TYPE_GUESS);
-            $csv->set_comment_chars("%#");
+            $csv->set_comment_start("###");
             $csv->set_comment_function([$this, "parse_csv_comment"]);
             $csv->set_filename($filename);
         }
@@ -1864,9 +1880,9 @@ class AssignmentSet {
         }
         foreach ($this->unparse_columns as $k => $v) {
             if ($v)
-                $q .= " show:$k";
+                $q .= " show:{$k}";
         }
-        $pc->search_query = "$q show:autoassignment";
+        $pc->search_query = "{$q} show:autoassignment";
 
         return $pc;
     }
@@ -1953,7 +1969,7 @@ class AssignmentSet {
         }
         if (!empty($this->_cleanup_notify_tracker)
             && $this->conf->opt("trackerCometSite")) {
-            MeetingTracker::contact_tracker_comet($this->conf, array_keys($this->_cleanup_notify_tracker));
+            MeetingTracker::notify_tracker($this->conf, array_keys($this->_cleanup_notify_tracker));
         }
         $this->conf->release_logs();
 
@@ -2040,8 +2056,8 @@ class Assignment_PaperColumn extends PaperColumn {
         $search = new PaperSearch($pc->user, ["q" => $pc->search_query, "t" => "viewable", "reviewer" => $pc->reviewer]);
         $plist = new PaperList("reviewers", $search);
         $plist->add_column("autoassignment", $pc);
-        $plist->set_table_id_class("foldpl", "pltable-fullw remargin-left remargin-right");
-        $plist->set_table_decor(PaperList::DECOR_HEADER);
+        $plist->set_table_id_class("foldpl", null);
+        $plist->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_FULLWIDTH);
         echo '<div class="pltable-fullw-container demargin">';
         $plist->print_table_html();
         echo '</div>';

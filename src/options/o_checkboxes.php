@@ -1,6 +1,6 @@
 <?php
 // o_checkboxes.php -- HotCRP helper class for checkboxes options
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Checkboxes_PaperOption extends CheckboxesBase_PaperOption {
     use Multivalue_OptionTrait;
@@ -10,6 +10,7 @@ class Checkboxes_PaperOption extends CheckboxesBase_PaperOption {
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
         $this->assign_values($args->values ?? [], $args->ids ?? null);
+        $this->compact = true;
     }
 
 
@@ -28,11 +29,12 @@ class Checkboxes_PaperOption extends CheckboxesBase_PaperOption {
         return $j;
     }
 
-    function unparse_setting($sfs) {
-        parent::unparse_setting($sfs);
+    function export_setting() {
+        $sfs = parent::export_setting();
         $this->unparse_values_setting($sfs);
         $sfs->min = $this->min_count;
         $sfs->max = $this->max_count;
+        return $sfs;
     }
 
     /** @return TopicSet */
@@ -52,8 +54,9 @@ class Checkboxes_PaperOption extends CheckboxesBase_PaperOption {
         $a = [$this->has_search_example()];
         if (($q = $this->value_search_keyword(2))) {
             $a[] = new SearchExample(
-                $this->search_keyword() . ":<value>", $q,
-                "<0>submission’s {title} field has value ‘{}’", $this->values[1]
+                $this, $this->search_keyword() . ":{value}",
+                "<0>submission’s {title} field has value ‘{value}’",
+                new FmtArg("value", $this->values[1])
             );
         }
         return $a;

@@ -1,6 +1,6 @@
 <?php
 // test/setup.php -- HotCRP helper file to initialize tests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 require_once(dirname(__DIR__) . "/src/siteloader.php");
 define("HOTCRP_OPTIONS", SiteLoader::find("test/options.php"));
@@ -15,6 +15,15 @@ initialize_conf();
 
 
 // Record mail in MailChecker.
+class MailCheckerExpectation {
+    /** @var string */
+    public $header;
+    /** @var string */
+    public $body;
+    /** @var string */
+    public $landmark;
+}
+
 class MailChecker {
     /** @var int */
     static public $disabled = 0;
@@ -22,7 +31,7 @@ class MailChecker {
     static public $print = false;
     /** @var list<MailPreparation> */
     static public $preps = [];
-    /** @var array<string,list<array{string,string}>> */
+    /** @var array<string,list<MailCheckerExpectation>> */
     static public $messagedb = [];
 
     /** @param MailPreparation $prep */
@@ -30,7 +39,8 @@ class MailChecker {
         if (self::$disabled === 0) {
             $prep->landmark = "";
             foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $trace) {
-                if (isset($trace["file"]) && preg_match('/\/test\d/', $trace["file"])) {
+                if (isset($trace["file"])
+                    && preg_match('/\/(?:test\d|t_)/', $trace["file"])) {
                     if (str_starts_with($trace["file"], SiteLoader::$root)) {
                         $trace["file"] = substr($trace["file"], strlen(SiteLoader::$root) + 1);
                     }
@@ -43,7 +53,7 @@ class MailChecker {
                 fwrite(STDOUT, "********\n"
                        . "To: " . join(", ", $prep->to) . "\n"
                        . "Subject: " . str_replace("\r", "", $prep->subject) . "\n"
-                       . ($prep->landmark ? "X-Landmark: $prep->landmark\n" : "") . "\n"
+                       . ($prep->landmark ? "X-Landmark: {$prep->landmark}\n" : "") . "\n"
                        . $prep->body);
             }
         }
@@ -93,9 +103,8 @@ class MailChecker {
     /** @param ?string $name */
     static function check_db($name = null) {
         if ($name) {
-            xassert(isset(self::$messagedb[$name]));
-            xassert_eqq(count(self::$preps), count(self::$messagedb[$name]));
-            $mdb = self::$messagedb[$name];
+            $mdb = self::$messagedb[$name] ?? [];
+            xassert_eqq(count(self::$preps), count($mdb));
         } else {
             xassert(!empty(self::$preps));
             $last_landmark = null;
@@ -122,7 +131,7 @@ class MailChecker {
         self::check_match($mdb);
     }
 
-    /** @param list<string> $mdb */
+    /** @param list<string|MailCheckerExpectation> $mdb */
     static function check_match($mdb) {
         $haves = [];
         foreach (self::$preps as $prep) {
@@ -131,34 +140,33 @@ class MailChecker {
                 . "\n\n" . $prep->body;
         }
         sort($haves);
-        $wants = [];
-        foreach ($mdb as $m) {
-            if (is_string($m)) {
-                $wants[] = $m;
-            } else {
-                $wants[] = preg_replace('/^X-Landmark:.*?\n/m', "", $m[0]) . $m[1];
-            }
-        }
-        sort($wants);
-        foreach ($wants as $want) {
-            list($match, $index, $badline) = self::find_best_mail_match($want, $haves);
+
+        foreach ($mdb as $want) {
+            $wtext = is_string($want)
+                ? $want
+                : preg_replace('/^X-Landmark:.*?\n/m', "", $want->header) . $want->body;
+            list($match, $index, $badline) = self::find_best_mail_match($wtext, $haves);
             if ($match) {
                 Xassert::succeed();
             } else if ($index !== false) {
                 $have = $haves[$index];
-                error_log(assert_location() . ": Mail mismatch: " . var_export($want, true) . " !== " . var_export($have, true));
+                error_log(assert_location() . ": Mail mismatch: " . var_export($wtext, true) . " !== " . var_export($have, true));
                 $havel = explode("\n", $have);
-                $wantl = explode("\n", $want);
+                $wantl = explode("\n", $wtext);
                 fwrite(STDERR, "... line {$badline} differs near {$havel[$badline-1]}\n... expected {$wantl[$badline-1]}\n");
+                if (is_object($want) && isset($want->landmark)) {
+                    fwrite(STDERR, "... expected mail at {$want->landmark}\n");
+                }
                 Xassert::fail();
             } else {
-                error_log(assert_location() . ": Mail not found: " . var_export($want, true));
+                error_log(assert_location() . ": Mail not found: " . var_export($wtext, true));
                 Xassert::fail();
             }
             if ($index !== false) {
                 array_splice($haves, $index, 1);
             }
         }
+
         foreach ($haves as $have) {
             error_log(assert_location() . ": Unexpected mail: " . var_export($have, true));
             Xassert::fail();
@@ -170,33 +178,52 @@ class MailChecker {
         self::$preps = [];
     }
 
-    /** @param string $text */
-    static function add_messagedb($text) {
-        preg_match_all('/^\*\*\*\*\*\*\*\*(.*)\n([\s\S]*?\n)(?=^\*\*\*\*\*\*\*\*|\z)/m', $text, $ms, PREG_SET_ORDER);
-        foreach ($ms as $m) {
-            $m[1] = trim($m[1]);
-            $nlpos = strpos($m[2], "\n\n");
-            $nlpos = $nlpos === false ? strlen($m[2]) : $nlpos + 2;
-            $header = substr($m[2], 0, $nlpos);
-            $body = substr($m[2], $nlpos);
-            if ($m[1] === ""
-                && preg_match('/\nX-Landmark:\s*(\S+)/', $header, $mx)) {
-                $m[1] = $mx[1];
+    /** @param string $text
+     * @param ?string $file */
+    static function add_messagedb($text, $file = null) {
+        $l = explode("\n", $text);
+        $n = count($l);
+        if ($n > 0 && $l[$n - 1] === "") {
+            --$n;
+        }
+        for ($i = 0; $i !== $n; ) {
+            if (!str_starts_with($l[$i], "********")) {
+                ++$i;
+                continue;
             }
-            if ($m[1] !== "") {
-                if (!isset(self::$messagedb[$m[1]])) {
-                    self::$messagedb[$m[1]] = [];
+
+            $mid = trim(substr($l[$i], 8));
+            $bodypos = null;
+            $j = $i + 1;
+            while ($j !== $n && !str_starts_with($l[$j], "********")) {
+                if ($bodypos === null) {
+                    if ($mid === ""
+                        && str_starts_with($l[$j], "X-Landmark:")) {
+                        $mid = trim(substr($l[$j], 11));
+                    } else if ($l[$j] === "") {
+                        $bodypos = $j + 1;
+                    }
                 }
-                if (trim($body) !== "") {
-                    $body = preg_replace('/^\\\\\\*/m', "*", $body);
-                    self::$messagedb[$m[1]][] = [$header, $body];
-                }
+                ++$j;
             }
+            $bodypos = $bodypos ?? $j;
+
+            $body = preg_replace('/^\\\\\\*/m', "*", join("\n", array_slice($l, $bodypos, $j - $bodypos)) . "\n");
+            if ($mid !== "" && trim($body) !== "") {
+                $mex = new MailCheckerExpectation;
+                $mex->header = join("\n", array_slice($l, $i + 1, $bodypos - $i - 1)) . "\n";
+                $mex->body = preg_replace('/^\\\\\\*/m', "*", $body);
+                $lineno = $i + 1;
+                $mex->landmark = $file ? "{$file}:{$lineno}" : "line {$lineno}";
+                self::$messagedb[$mid][] = $mex;
+            }
+
+            $i = $j;
         }
     }
 }
 
-MailChecker::add_messagedb(file_get_contents(SiteLoader::find("test/emails.txt")));
+MailChecker::add_messagedb(file_get_contents(SiteLoader::find("test/emails.txt")), "test/emails.txt");
 Conf::$main->add_hook((object) [
     "event" => "send_mail",
     "function" => "MailChecker::send_hook",
@@ -299,8 +326,8 @@ function xassert_error_handler($errno, $emsg, $file, $line) {
 
 set_error_handler("xassert_error_handler");
 
-function assert_location() {
-    return caller_landmark('/^(?:x?assert|MailChecker::check)/');
+function assert_location($position = 1) {
+    return caller_landmark($position, '/(?:^x?assert|^MailChecker::check|::x?assert)/');
 }
 
 /** @param mixed $x
@@ -332,6 +359,9 @@ function xassert_exit() {
 /** @return bool */
 function xassert_eqq($actual, $expected) {
     $ok = $actual === $expected;
+    if (!$ok && is_float($expected) && is_nan($expected) && is_float($actual) && is_nan($actual)) {
+        $ok = true;
+    }
     if ($ok) {
         Xassert::succeed();
     } else {
@@ -344,6 +374,9 @@ function xassert_eqq($actual, $expected) {
 /** @return bool */
 function xassert_neqq($actual, $nonexpected) {
     $ok = $actual !== $nonexpected;
+    if ($ok && is_float($nonexpected) && is_nan($nonexpected) && is_float($actual) && is_nan($actual)) {
+        $ok = false;
+    }
     if ($ok) {
         Xassert::succeed();
     } else {
@@ -358,8 +391,12 @@ function xassert_neqq($actual, $nonexpected) {
  * @return bool */
 function xassert_in_eqq($member, $list) {
     $ok = false;
+    $nan = is_float($member) && is_nan($member);
     foreach ($list as $bx) {
-        $ok = $ok || $member === $bx;
+        if ($member === $bx || ($nan && is_float($bx) && is_nan($bx))) {
+            $ok = true;
+            break;
+        }
     }
     if ($ok) {
         Xassert::succeed();
@@ -375,8 +412,12 @@ function xassert_in_eqq($member, $list) {
  * @return bool */
 function xassert_not_in_eqq($member, $list) {
     $ok = true;
+    $nan = is_float($member) && is_nan($member);
     foreach ($list as $bx) {
-        $ok = $ok && $member !== $bx;
+        if ($member === $bx || ($nan && is_float($bx) && is_nan($bx))) {
+            $ok = false;
+            break;
+        }
     }
     if ($ok) {
         Xassert::succeed();
@@ -529,10 +570,14 @@ function xassert_int_list_eqq($actual, $expected) {
 /** @param Contact $user
  * @param string|array $query
  * @param string $cols
+ * @param bool $allow_warnings
  * @return array<int,array> */
-function search_json($user, $query, $cols = "id") {
+function search_json($user, $query, $cols = "id", $allow_warnings = false) {
     $pl = new PaperList("empty", new PaperSearch($user, $query));
     $pl->parse_view($cols);
+    if ($pl->search->has_problem() && !$allow_warnings) {
+        error_log(assert_location() . ": Search reports warnings: " . $pl->search->full_feedback_text());
+    }
     return $pl->text_json();
 }
 
@@ -553,9 +598,19 @@ function search_text_col($user, $query, $col = "id") {
 }
 
 /** @param Contact $user
+ * @param string|array $query
+ * @param list<int|string>|string $expected
  * @return bool */
 function assert_search_papers($user, $query, $expected) {
     return xassert_int_list_eqq(array_keys(search_json($user, $query)), $expected);
+}
+
+/** @param Contact $user
+ * @param string|array $query
+ * @param list<int|string>|string $expected
+ * @return bool */
+function assert_search_papers_ignore_warnings($user, $query, $expected) {
+    return xassert_int_list_eqq(array_keys(search_json($user, $query, "id", true)), $expected);
 }
 
 /** @param Contact $user
@@ -628,9 +683,22 @@ function xassert_assign_fail($who, $what, $override = false) {
     return xassert(!$assignset->execute());
 }
 
-/** @param int $maxstatus */
-function xassert_paper_status(PaperStatus $ps, $maxstatus = MessageSet::PLAIN) {
-    if (!xassert($ps->problem_status() <= $maxstatus)) {
+/** @param ?int $maxstatus */
+function xassert_paper_status(PaperStatus $ps, $maxstatus = null) {
+    $xmaxstatus = $maxstatus ?? MessageSet::PLAIN;
+    $ok = true;
+    foreach ($ps->message_list() as $mx) {
+        if ($mx->status > $maxstatus
+            && ($maxstatus !== null
+                || $mx->status !== MessageSet::WARNING
+                || $mx->field !== "submission"
+                || $mx->message !== "<0>Entry required to complete submission")) {
+            $ok = false;
+            break;
+        }
+    }
+    if (!$ok) {
+        xassert($ps->problem_status() <= $xmaxstatus);
         foreach ($ps->message_list() as $mx) {
             if ($mx->status === MessageSet::INFORM && $mx->message) {
                 error_log("!     {$mx->message}");
@@ -770,12 +838,12 @@ const TESTSC_DISABLED = 4;
  * @return string */
 function sorted_conflicts(PaperInfo $prow, $flags) {
     $c = [];
-    foreach ($prow->conflicts(true) as $cflt) {
-        if (($cflt->conflictType >= CONFLICT_AUTHOR
+    foreach ($prow->conflict_list() as $cu) {
+        if (($cu->conflictType >= CONFLICT_AUTHOR
              ? ($flags & TESTSC_CONTACTS) !== 0
              : ($flags & TESTSC_CONFLICTS) !== 0)
-            && ($cflt->disablement === 0 || ($flags & TESTSC_DISABLED) !== 0))
-            $c[] = $cflt->email;
+            && ($cu->user->disablement === 0 || ($flags & TESTSC_DISABLED) !== 0))
+            $c[] = $cu->user->email;
     }
     sort($c);
     return join(" ", $c);
@@ -791,7 +859,7 @@ class TestRunner {
         if (is_array($assignments)) {
             $assignments = join("\n", $assignments);
         }
-        $assignset = new AssignmentSet($user, true);
+        $assignset = (new AssignmentSet($user))->override_conflicts();
         $assignset->parse($assignments);
         if (!$assignset->execute()) {
             error_log("* Failed to run assignments:\n" . $assignset->full_feedback_text());
@@ -897,7 +965,7 @@ class TestRunner {
         }
         $timer->mark("users");
         foreach ($json->papers as $p) {
-            $ps = new PaperStatus($conf);
+            $ps = new PaperStatus($conf->root_user());
             if (!$ps->save_paper_json($p)) {
                 $t = join("", array_map(function ($mx) {
                     return "    {$mx->field}: {$mx->message}\n";
@@ -957,7 +1025,6 @@ class TestRunner {
 
     /** @param string $url */
     static function set_navigation_base($url) {
-        Navigation::analyze();
         $nav = Navigation::get();
         $urlp = parse_url($url);
         $nav->protocol = ($urlp["scheme"] ?? "http") . "://";

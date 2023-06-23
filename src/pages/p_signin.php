@@ -13,7 +13,7 @@ class Signin_Page {
     private $_ms;
 
     static private function bad_post_error(Contact $user, Qrequest $qreq, $action) {
-        $sid = $qreq->qsid();
+        $sid = $qreq->qsid() ?? "";
         $msg = "{$user->conf->dbname}: ignoring unvalidated {$action}"
             . ", sid=" . ($sid === "" ? ".empty" : $sid);
         if ($qreq->email) {
@@ -33,9 +33,9 @@ class Signin_Page {
         }
         $qreq->open_session();
         if ($qreq->post_retry) {
-            $user->conf->error_msg($user->conf->_id("session_failed_error", ""));
+            $user->conf->error_msg($user->conf->_i("session_failed_error"));
         } else {
-            $user->conf->warning_msg($user->conf->_id("badpost", ""));
+            $user->conf->warning_msg($user->conf->_i("badpost"));
         }
     }
 
@@ -148,9 +148,9 @@ class Signin_Page {
     }
 
     static function print_form_start_for(Qrequest $qreq, $page, $extraclass = "") {
-        echo '<div class="', $extraclass ? Ht::add_tokens("homegrp", $extraclass) : "homegrp",
+        echo '<div class="', Ht::add_tokens("homegrp", $extraclass),
             '" id="homeaccount">',
-            Ht::form($qreq->conf()->hoturl($page), ["class" => "compact-form ui-submit uin js-signin"]),
+            Ht::form($qreq->conf()->hoturl($page), ["class" => "compact-form ui-submit js-signin"]),
             Ht::hidden("post", $qreq->post_value(true));
         if ($qreq->is_post() && !$qreq->valid_token()) {
             echo Ht::hidden("post_retry", "1");

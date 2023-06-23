@@ -81,6 +81,7 @@ users.php
 
 batch/.htaccess
 batch/assign.php
+batch/autoassign.php
 batch/backupdb.php
 batch/checkinvariants.php
 batch/deletepapers.php
@@ -103,6 +104,7 @@ etc/.htaccess
 etc/affiliationmatchers.json
 etc/apifunctions.json
 etc/assignmentparsers.json
+etc/autoassigners.json
 etc/capabilityhandlers.json
 etc/distoptions.php
 etc/formulafunctions.json
@@ -116,6 +118,7 @@ etc/optiontypes.json
 etc/pages.json
 etc/papercolumns.json
 etc/profilegroups.json
+etc/reviewfieldtypes.json
 etc/reviewformlibrary.json
 etc/sample.pdf
 etc/searchkeywords.json
@@ -145,12 +148,14 @@ lib/fmt.php
 lib/ftext.php
 lib/getopt.php
 lib/gmpshim.php
+lib/hclcolor.php
 lib/ht.php
 lib/icons.php
 lib/json.php
 lib/jsonexception.php
 lib/jsonparser.php
 lib/jwtparser.php
+lib/labcolor.php
 lib/ldaplogin.php
 lib/login.php
 lib/mailer.php
@@ -161,6 +166,8 @@ lib/mimetext.php
 lib/mimetype.php
 lib/mincostmaxflow.php
 lib/navigation.php
+lib/oklabcolor.php
+lib/oklchcolor.php
 lib/phpqsession.php
 lib/polyfills.php
 lib/qrequest.php
@@ -184,12 +191,15 @@ src/api/api_completion.php
 src/api/api_decision.php
 src/api/api_error.php
 src/api/api_events.php
+src/api/api_follow.php
 src/api/api_formatcheck.php
 src/api/api_graphdata.php
 src/api/api_mail.php
+src/api/api_paper.php
 src/api/api_paperpc.php
 src/api/api_preference.php
 src/api/api_requestreview.php
+src/api/api_review.php
 src/api/api_reviewtoken.php
 src/api/api_search.php
 src/api/api_searchconfig.php
@@ -198,7 +208,9 @@ src/api/api_settings.php
 src/api/api_taganno.php
 src/api/api_tags.php
 src/api/api_user.php
+src/apihelpers.php
 src/assigners/a_conflict.php
+src/assigners/a_copytag.php
 src/assigners/a_decision.php
 src/assigners/a_error.php
 src/assigners/a_follow.php
@@ -214,6 +226,11 @@ src/author.php
 src/authormatcher.php
 src/autoassigner.php
 src/autoassignerinterface.php
+src/autoassigners/aa_clear.php
+src/autoassigners/aa_discussionorder.php
+src/autoassigners/aa_paperpc.php
+src/autoassigners/aa_prefconflict.php
+src/autoassigners/aa_review.php
 src/backuppattern.php
 src/banal
 src/capabilities/cap_authorview.php
@@ -230,6 +247,7 @@ src/contactcounter.php
 src/contactcountmatcher.php
 src/contactlist.php
 src/contactsearch.php
+src/contactset.php
 src/decisioninfo.php
 src/decisionset.php
 src/documentfiletree.php
@@ -299,7 +317,6 @@ src/listactions/la_get_sub.php
 src/listactions/la_mail.php
 src/listactions/la_revpref.php
 src/listactions/la_tag.php
-src/listsorter.php
 src/logentry.php
 src/logentryfilter.php
 src/mailrecipients.php
@@ -309,6 +326,7 @@ src/mentionparser.php
 src/mergecontacts.php
 src/multiconference.php
 src/options/o_abstract.php
+src/options/o_attachments.php
 src/options/o_authors.php
 src/options/o_checkboxes.php
 src/options/o_checkboxesbase.php
@@ -353,10 +371,10 @@ src/pages/p_search.php
 src/pages/p_settings.php
 src/pages/p_signin.php
 src/pages/p_users.php
-src/paperapi.php
 src/papercolumn.php
 src/papercolumns/pc_administrator.php
 src/papercolumns/pc_assignreview.php
+src/papercolumns/pc_color.php
 src/papercolumns/pc_commenters.php
 src/papercolumns/pc_conflict.php
 src/papercolumns/pc_conflictmatch.php
@@ -380,6 +398,7 @@ src/papercolumns/pc_topics.php
 src/papercolumns/pc_topicscore.php
 src/papercolumns/pc_wordcount.php
 src/paperevents.php
+src/paperexport.php
 src/paperinfo.php
 src/paperlist.php
 src/paperoption.php
@@ -388,16 +407,23 @@ src/papersearch.php
 src/paperstatus.php
 src/papertable.php
 src/paperrank.php
+src/papervalue.php
 src/permissionproblem.php
 src/quicklinksrenderer.php
 src/responseround.php
 src/reviewdiffinfo.php
 src/reviewfield.php
+src/reviewfields/rf_checkbox.php
+src/reviewfields/rf_checkboxes.php
+src/reviewfields/rf_discrete.php
+src/reviewfields/rf_text.php
+src/reviewfieldsearch.php
 src/reviewform.php
 src/reviewhistoryinfo.php
 src/reviewinfo.php
 src/reviewrefusalinfo.php
 src/reviewrequestinfo.php
+src/reviewsearchmatcher.php
 src/reviewtimes.php
 src/schema.sql
 src/search/st_admin.php
@@ -428,15 +454,18 @@ src/search/st_reconflict.php
 src/search/st_review.php
 src/search/st_reviewtoken.php
 src/search/st_revpref.php
+src/search/st_sclass.php
 src/search/st_tag.php
 src/search/st_topic.php
 src/searchexample.php
 src/searchselection.php
 src/searchsplitter.php
 src/searchterm.php
+src/searchword.php
 src/sessionlist.php
 src/settinginfoset.php
 src/settingparser.php
+src/settings/s_automatictag.php
 src/settings/s_banal.php
 src/settings/s_basics.php
 src/settings/s_decision.php
@@ -454,6 +483,7 @@ src/settings/s_rf.php
 src/settings/s_sf.php
 src/settings/s_shepherds.php
 src/settings/s_sitecontact.php
+src/settings/s_sround.php
 src/settings/s_subfieldcondition.php
 src/settings/s_subform.php
 src/settings/s_submissions.php
@@ -466,6 +496,7 @@ src/settingvalues.php
 src/si.php
 src/siteloader.php
 src/sitype.php
+src/submissionround.php
 src/tagmessagereport.php
 src/tagrankparser.php
 src/tagsearchmatcher.php
@@ -479,6 +510,7 @@ src/useractions.php
 src/userinfo/u_developer.php
 src/userinfo/u_security.php
 src/userstatus.php
+src/xtparams.php
 
 devel/hotcrp.vim
 
@@ -531,7 +563,7 @@ scripts/buzzer.js
 scripts/emojicodes.json
 scripts/graph.js
 scripts/jquery-1.12.4.min.js
-scripts/jquery-3.6.0.min.js
+scripts/jquery-3.6.4.min.js
 scripts/script.js
 scripts/settings.js
 

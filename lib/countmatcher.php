@@ -1,12 +1,24 @@
 <?php
 // countmatcher.php -- HotCRP helper class for textual comparators
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class CountMatcher {
     /** @var int */
     private $op = 0;
     /** @var float */
     private $value = 0.0;
+
+    const RELLT = 1;
+    const RELEQ = 2;
+    const RELGT = 4;
+
+    const RELLE = 3;
+    const RELNE = 5;
+    const RELGE = 6;
+
+    // other bits not used here; see ReviewFieldSearch
+    const RELALL = 16;
+    const RELSPAN = 32;
 
     static public $opmap = ["" => 2, "#" => 2, "=" => 2, "==" => 2,
                             "!" => 5, "!=" => 5, "≠" => 5,
@@ -138,7 +150,19 @@ class CountMatcher {
     /** @param int $relation
      * @return int */
     static function flip_relation($relation) {
-        return $relation & 5 ? $relation ^ 5 : $relation;
+        // flip iff RELGT bit ≠ RELLT bit
+        $relasym = (($relation >> 2) ^ $relation) & 1;
+        return $relation ^ (5 & -$relasym);
+    }
+
+    /** @param string $relstr
+     * @return string */
+    static function flip_unparsed_relation($relstr) {
+        if (($xr = self::parse_relation($relstr)) !== null
+            && ((($xr >> 2) ^ $xr) & 1) === 1) {
+            return self::$oparray[$xr ^ 5];
+        }
+        return $relstr;
     }
 
 

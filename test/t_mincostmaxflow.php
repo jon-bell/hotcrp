@@ -1,6 +1,6 @@
 <?php
 // t_mincostmaxflow.php -- HotCRP tests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class MinCostMaxFlow_Tester {
     /** @param MinCostMaxFlow $m
@@ -8,7 +8,7 @@ class MinCostMaxFlow_Tester {
     function mcmf_assignment_text($m) {
         $a = [];
         foreach ($m->nodes("u") as $u) {
-            foreach ($m->reachable($u, "p") as $p) {
+            foreach ($m->downstream($u, "p") as $p) {
                 $a[] = "$u->name $p->name\n";
             }
         }

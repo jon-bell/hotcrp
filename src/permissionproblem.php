@@ -137,12 +137,15 @@ class PermissionProblem extends Exception
     /** @param int $format
      * @return string */
     function unparse($format = 0) {
+        $ms = $args = [];
         $paperId = $this->_a["paperId"] ?? -1;
+        if ($paperId > 0) {
+            $args[] = new FmtArg("pid", $paperId, 0);
+        }
         $option = $this->_a["option"] ?? null;
         '@phan-var ?PaperOption $option';
-        $ms = [];
         if ($option) {
-            $this->_a["option_title"] = $option->title();
+            $args[] = new FmtArg("field", $option->title(), 0);
         }
         if (isset($this->_a["invalidId"])) {
             $id = $this->_a["invalidId"];
@@ -168,17 +171,17 @@ class PermissionProblem extends Exception
             $ms[] = $this->conf->_("<0>You can’t administer submission #{}.", $paperId);
         }
         if (isset($this->_a["permission"])) {
-            $ms[] = $this->conf->_c("eperm", "<0>Permission error.", $this->_a["permission"], $paperId, $this->_a);
+            $ms[] = $this->conf->_i("permission_error", new FmtArg("action", $this->_a["permission"]), ...$args);
         }
         if ($this->_a["optionNonexistent"] ?? false) {
-            $ms[] = $this->conf->_("<0>The {1} field is not present on submission #{0}.", $paperId, $option->title());
+            $ms[] = $this->conf->_("<0>The {field} field is not present on submission #{pid}", ...$args);
         }
         if (isset($this->_a["documentNotFound"])) {
             $ms[] = $this->conf->_("<0>Document “{}” not found.", $this->_a["documentNotFound"]);
         }
         if (isset($this->_a["signin"])) {
             $url = $this->_a["signinUrl"] ?? $this->conf->hoturl_raw("signin");
-            $ms[] = $this->conf->_c("eperm", "<5>You must <a href=\"{2:html}\">sign in</a> to access this page.", $this->_a["signin"], $paperId, $url);
+            $ms[] = $this->conf->_i("signin_required", new FmtArg("url", $url, 0), new FmtArg("action", $this->_a["signin"]));
         }
         if ($this->_a["withdrawn"] ?? false) {
             $ms[] = $this->conf->_("<0>Submission #{} has been withdrawn.", $paperId);
@@ -189,17 +192,14 @@ class PermissionProblem extends Exception
         if ($this->_a["notSubmitted"] ?? false) {
             $ms[] = $this->conf->_("<0>Submission #{} is only a draft.", $paperId);
         }
-        if ($this->_a["rejected"] ?? false) {
-            $ms[] = $this->conf->_("<0>Submission #{} was not accepted for publication.", $paperId);
-        }
         if ($this->_a["reviewsSeen"] ?? false) {
             $ms[] = $this->conf->_("<0>You can’t withdraw a submission after seeing its reviews.", $paperId);
         }
         if ($this->_a["decided"] ?? false) {
             $ms[] = $this->conf->_("<0>The review process for submission #{} has completed.", $paperId);
         }
-        if ($this->_a["updateSubmitted"] ?? false) {
-            $ms[] = $this->conf->_("<0>Submission #{} can no longer be updated.", $paperId);
+        if ($this->_a["frozen"] ?? false) {
+            $ms[] = $this->conf->_("<0>Submission #{} can no longer be edited.", $paperId);
         }
         if ($this->_a["notUploaded"] ?? false) {
             $ms[] = $this->conf->_("<0>A PDF upload is required to submit.");
@@ -294,7 +294,7 @@ class PermissionProblem extends Exception
         // finish it off
         if (($this->_a["forceShow"] ?? false)
             && $format === 5
-            && Navigation::page() !== "api") {
+            && Navigation::get()->page !== "api") {
             $ms[] = $this->conf->_("<5><a class=\"nw\" href=\"{}\">Override conflict</a>", $this->conf->selfurl(Qrequest::$main_request, ["forceShow" => 1]));
         }
         if (!empty($ms)
@@ -308,12 +308,29 @@ class PermissionProblem extends Exception
         }
         return join(" ", $mx);
     }
+
     /** @return string */
     function unparse_text() {
         return $this->unparse(0);
     }
+
     /** @return string */
     function unparse_html() {
         return $this->unparse(5);
+    }
+
+    /** @param ?string $field
+     * @param 1|2|3 $status
+     * @return Iterable<MessageItem> */
+    function message_list($field, $status) {
+        return [new MessageItem(null, "<5>" . $this->unparse_html(), $status)];
+    }
+
+    /** @param ?string $field
+     * @param 1|2|3 $status */
+    function append_to(MessageSet $ms, $field, $status) {
+        foreach ($this->message_list($field, $status) as $mi) {
+            $ms->append_item($mi);
+        }
     }
 }

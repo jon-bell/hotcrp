@@ -1,6 +1,6 @@
 <?php
 // o_realnumber.php -- HotCRP helper class for whole-number options
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class RealNumber_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
@@ -19,7 +19,7 @@ class RealNumber_PaperOption extends PaperOption {
         }
     }
 
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return $ov->value !== null ? floatval($ov->data()) : null;
     }
 
@@ -75,8 +75,9 @@ class RealNumber_PaperOption extends PaperOption {
         return [
             $this->has_search_example(),
             new SearchExample(
-                $this->search_keyword() . ":<comparator>", ">12.5",
-                "<0>submission’s {title} field is greater than 12.5"
+                $this, $this->search_keyword() . ":{comparator}",
+                "<0>submission’s {title} field is greater than 12.5",
+                new FmtArg("comparator", ">12.5")
             )
         ];
     }

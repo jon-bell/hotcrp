@@ -1,6 +1,6 @@
 <?php
 // t_authormatch.php -- HotCRP tests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class AuthorMatch_Tester {
     function test_affiliations() {
@@ -193,5 +193,32 @@ class AuthorMatch_Tester {
         $au = Author::make_string("G.-Y. (Ken (Butt)) Lueh (France (Crap) Telecom");
         xassert_eqq($au->firstName, "G.-Y. (Ken (Butt))");
         xassert_eqq($au->affiliation, "France (Crap) Telecom");
+    }
+
+    function test_user_comparator() {
+        $aus = [
+            Author::make_string("Yu Hua <csyhua@whatever.com>"),
+            Author::make_string("Wen Hu <wen.hu@whatever.com>"),
+            Author::make_string("Y. Charlie Hu <ychu@whatever.com>"),
+            Author::make_string("\"Peggy\" Chamberlain <pchamber@whatever.com>"),
+            Author::make_string("Peggy Donnelan <pdo@whatever.com>"),
+            Author::make_string("Ocarina Donnelan <ocarina@whatever.com>"),
+            Author::make_string("Quisling Donnelan <quis@whatever.com>")
+        ];
+        $mkaus = function ($as) { return array_map(function ($a) { return $a->name(); }, $as); };
+
+        $fcoll = Conf::make_user_comparator(false);
+        usort($aus, $fcoll);
+        xassert_array_eqq($mkaus($aus), [
+            "Ocarina Donnelan", "\"Peggy\" Chamberlain", "Peggy Donnelan",
+            "Quisling Donnelan", "Wen Hu", "Y. Charlie Hu", "Yu Hua"
+        ]);
+
+        $lcoll = Conf::make_user_comparator(true);
+        usort($aus, $lcoll);
+        xassert_array_eqq($mkaus($aus), [
+            "\"Peggy\" Chamberlain", "Ocarina Donnelan", "Peggy Donnelan",
+            "Quisling Donnelan", "Wen Hu", "Y. Charlie Hu", "Yu Hua"
+        ]);
     }
 }

@@ -1,6 +1,6 @@
 <?php
 // filefilter.php -- HotCRP helper class for filtering documents
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class FileFilter {
     public $id;
@@ -82,6 +82,7 @@ class FileFilterJsonExpander {
                 $ff = call_user_func($fj->function, $this->conf, $fj);
             }
             if ($ff) {
+                assert($ff instanceof FileFilter);
                 $ff->id = $fj->id ?? null;
                 $ff->name = $fj->name;
                 $this->conf->_file_filters[$ff->name] = $ff;

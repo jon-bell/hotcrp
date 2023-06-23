@@ -1,6 +1,6 @@
 <?php
 // multiconference.php -- HotCRP multiconference installations
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Multiconference {
     /** @var array<string,?Conf> */
@@ -12,7 +12,7 @@ class Multiconference {
 
         $confid = $confid ?? $Opt["confid"] ?? null;
         if ($confid === null && PHP_SAPI !== "cli") {
-            $base = Navigation::base_absolute(true);
+            $base = Navigation::get()->base_absolute(true);
             if (($multis = $Opt["multiconferenceAnalyzer"] ?? null)) {
                 foreach (is_array($multis) ? $multis : [$multis] as $multi) {
                     list($match, $replace) = explode(" ", $multi);
@@ -117,7 +117,15 @@ class Multiconference {
             exit(1);
         }
 
-        if (Navigation::page() === "api" || ($_GET["ajax"] ?? null)) {
+        $qreq = $qreq ?? Qrequest::$main_request ?? Qrequest::make_minimal();
+        if (!$qreq->conf) {
+            $qreq->set_conf(Conf::$main ?? new Conf($Opt, false));
+        }
+        if ($link === false) {
+            $qreq->set_user(null);
+        }
+
+        if ($qreq->page() === "api" || ($_GET["ajax"] ?? null)) {
             http_response_code($status);
             header("Content-Type: application/json; charset=utf-8");
             $j = ["ok" => false, "message_list" => $mis];
@@ -128,13 +136,6 @@ class Multiconference {
             exit;
         }
 
-        $qreq = $qreq ?? Qrequest::$main_request ?? Qrequest::make_minimal();
-        if (!$qreq->conf) {
-            $qreq->set_conf(Conf::$main ?? new Conf($Opt, false));
-        }
-        if ($link === false) {
-            $qreq->set_user(null);
-        }
         http_response_code($status);
         $qreq->print_header($title, "", ["action_bar" => "", "body_class" => "body-error"]);
         $mis[0] = $mis[0] ?? MessageItem::error("<0>Internal error");
@@ -271,7 +272,7 @@ class Multiconference {
     static function batch_exception_handler($ex) {
         global $argv;
         $s = $ex->getMessage();
-        if (defined("HOTCRP_TESTHARNESS")) {
+        if (defined("HOTCRP_TESTHARNESS") || $ex instanceof Error) {
             $s = $ex->getFile() . ":" . $ex->getLine() . ": " . $s;
         }
         if (strpos($s, ":") === false) {
@@ -298,6 +299,11 @@ class Multiconference {
             $s .= debug_string_backtrace($ex) . "\n";
         }
         fwrite(STDERR, $s);
-        exit(1);
+        if (property_exists($ex, "exitStatus")
+            && is_int($ex->exitStatus)) {
+            exit($ex->exitStatus);
+        } else {
+            exit(3);
+        }
     }
 }
