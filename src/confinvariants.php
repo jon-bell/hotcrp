@@ -1,6 +1,6 @@
 <?php
 // confinvariants.php -- HotCRP invariant checker
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class ConfInvariants {
     /** @var Conf */
@@ -62,17 +62,19 @@ class ConfInvariants {
         } else if ($text === null) {
             $text = $abbrev;
         }
-        $text = preg_replace_callback('/\{(\d+)\}/', function ($m) {
-            $v = $this->irow[$m[1]] ?? "";
-            if (!is_usascii($v)) {
-                $v = bin2hex($v);
-                if (str_starts_with($v, "736861322d") && strlen($v) === 74) {
-                    $v = "sha2-" . substr($v, 10);
+        $vs = [];
+        foreach ($this->irow ?? [] as $t) {
+            $t = $t ?? "<null>";
+            if (!is_usascii($t)) {
+                $t = bin2hex($t);
+                if (str_starts_with($t, "736861322d") && strlen($t) === 74) {
+                    $t = "sha2-" . substr($t, 10);
                 }
             }
-            return $v;
-        }, $text);
-        $msg = "{$this->prefix}{$this->conf->dbname} invariant violation: {$text}";
+            $vs[] = $t;
+        }
+        $msg = "{$this->prefix}{$this->conf->dbname} invariant violation: "
+            . $this->conf->_($text, ...$vs);
         if ($this->msgbuf !== null) {
             $this->msgbuf[] = $msg . "\n";
         } else {
@@ -243,6 +245,15 @@ class ConfInvariants {
             $this->invariant_error("review_timeDisplayed", "submitted/ordinal review #{0}/{1} has no timeDisplayed");
         }
 
+        // rflags is defined correctly
+        $skipf = ReviewInfo::RF_SELF_ASSIGNED | ReviewInfo::RF_CONTENT_EDITED | ReviewInfo::RF_AUSEEN | ReviewInfo::RF_AUSEEN_PREVIOUS | ReviewInfo::RF_AUSEEN_LIVE;
+        $any = $this->invariantq("select paperId, reviewId, rflags, concat(reviewType, ':', reviewModified, ':', timeApprovalRequested, ':', coalesce(reviewSubmitted,0), ':', reviewBlind) from PaperReview r
+            where (rflags&~?)!=1|(1<<reviewType)|if(reviewModified>0,256,0)|if(reviewModified>1,512,0)|if(timeApprovalRequested!=0,1024,0)|if(timeApprovalRequested<0,2048,0)|if(coalesce(reviewSubmitted>0),4096,0)|if(reviewBlind!=0,65536,0)
+            limit 1", $skipf);
+        if ($any) {
+            $this->invariant_error("rflags", "bad rflags for review #{0}/{1} [{2:x} v {3}]");
+        }
+
         return $this;
     }
 
@@ -291,60 +302,63 @@ class ConfInvariants {
     /** @return $this */
     function check_automatic_tags() {
         $dt = $this->conf->tags();
-        if (!$dt->has_automatic) {
+        $user = $this->conf->root_user();
+        $checkers = $qs = [];
+        foreach ($dt->entries_having(TagInfo::TF_AUTOMATIC) as $t) {
+            $checkers[] = $ch = new ConfInvariant_AutomaticTagChecker($t);
+            $qs[] = $ch->clause;
+        }
+
+        if (empty($checkers)) {
             return $this;
         }
 
-        $user = $this->conf->root_user();
-        $q = $qtags = [];
-        $autotags = $autosearches = $autoformulas = [];
-        foreach ($dt->filter("automatic") as $t) {
-            $srch = $t->automatic_search();
-            $ftext = $t->automatic_formula_expression();
-            if ($srch !== null) {
-                $q[] = "(($srch) XOR #{$t->tag})";
-                $qtags[] = $t;
-            }
-            if ($ftext !== false && $ftext !== "0") {
-                $f = new Formula($ftext);
-                if ($f->check($user)) {
-                    $autotags[] = $t->tag;
-                    $autosearches[] = new PaperSearch($user, ["q" => $srch ?? "ALL", "t" => "all"]);
-                    $autoformulas[] = $f->compile_function();
+        $srch = new PaperSearch($user, ["q" => join(" THEN ", $qs), "t" => "all"]);
+        $rowset = $user->paper_set(["paperId" => $srch->paper_ids()]);
+        $nch = count($checkers);
+        foreach ($rowset as $row) {
+            for ($chi = $srch->paper_group_index($row->paperId) ?? 0; $chi < $nch; ++$chi) {
+                $ch = $checkers[$chi];
+                if ($ch->reported) {
+                    continue;
                 }
+                $v0 = $row->tag_value($ch->tag);
+                $v1 = $ch->expected_value($row);
+                if ($v0 === $v1) {
+                    continue;
+                }
+                if ($v0 === null || $v1 === null) {
+                    $this->invariant_error("autosearch", "automatic tag #{$ch->tag} disagrees with search {$ch->dt->automatic_search()} on #{$row->paperId}");
+                } else {
+                    $this->invariant_error("autosearch", "automatic tag #{$ch->tag} has bad value " . json_encode($v0) . " (expected " . json_encode($v1) . ") on #{$row->paperId}");
+                }
+                $ch->reported = true;
             }
         }
 
-        if (!empty($q)) {
-            $search = new PaperSearch($user, ["q" => join(" THEN ", $q), "t" => "all"]);
-            foreach ($search->paper_ids() as $pid) {
-                $then = $search->paper_group_index($pid) ?? 0;
-                if (($t = $qtags[$then] ?? null)) {
-                    $this->invariant_error("autosearch", "automatic tag #" . $t->tag . " disagrees with search " . $t->automatic_search() . " on #" . $pid);
-                    unset($qtags[$then]);
-                }
+        $vcheckers = $qs = [];
+        foreach ($checkers as $ch) {
+            if (!$ch->reported && $ch->value_formula) {
+                $vcheckers[] = $ch;
+                $qs[] = "#{$ch->tag}";
             }
         }
+        if (empty($vcheckers)) {
+            return;
+        }
 
-        if (!empty($autotags)) {
-            $search = $this->conf->paper_set(["q" => "#" . join(" OR #", $autotags), "t" => "all"], $user);
-            foreach ($search as $prow) {
-                foreach ($autotags as $i => $tag) {
-                    if ($tag !== null
-                        && $prow->has_tag($tag)
-                        && $autosearches[$i]->test($prow)) {
-                        $v0 = $prow->tag_value($tag);
-                        $v1 = call_user_func($autoformulas[$i], $prow, null, $user);
-                        if (is_bool($v1)) {
-                            $v1 = $v1 ? 0.0 : null;
-                        } else if (is_int($v1)) {
-                            $v1 = (float) $v1;
-                        }
-                        if ($v0 !== $v1) {
-                            $this->invariant_error("autosearch", "automatic tag #" . $tag . " has bad value " . json_encode($v0) . " (expected " . json_encode($v1) . ") on #" . $prow->paperId);
-                            $autotags[$i] = null;
-                        }
-                    }
+        $rowset = $this->conf->paper_set(["q" => join(" OR ", $qs), "t" => "all"]);
+        foreach ($rowset as $row) {
+            $chi = 0;
+            while ($chi < count($vcheckers)) {
+                $ch = $vcheckers[$chi];
+                $v0 = $row->tag_value($ch->tag);
+                $v1 = $v0 !== null ? $ch->expected_value($row) : null;
+                if ($v0 !== $v1) {
+                    $this->invariant_error("autosearch", "automatic tag #{$ch->tag} has bad value " . json_encode($v0) . " (expected " . json_encode($v1) . ") on #{$row->paperId}");
+                    array_splice($vcheckers, $chi, 1);
+                } else {
+                    ++$chi;
                 }
             }
         }
@@ -403,18 +417,19 @@ class ConfInvariants {
 
         // load users
         $primary = [];
-        $result = $this->conf->qe("select contactId, firstName, lastName, email, affiliation, primaryContactId, roles, disabled, contactTags from ContactInfo");
+        $result = $this->conf->qe("select " . $this->conf->user_query_fields() . ", unaccentedName from ContactInfo");
         while (($u = $result->fetch_object())) {
             $u->contactId = intval($u->contactId);
             $u->primaryContactId = intval($u->primaryContactId);
             $u->roles = intval($u->roles);
             $u->disabled = intval($u->disabled);
+            $u->cflags = intval($u->cflags);
             unset($authors[strtolower($u->email)]);
 
             // anonymous users are disabled
             if (str_starts_with($u->email, "anonymous")
                 && Contact::is_anonymous_email($u->email)
-                && ($u->disabled & 1) !== 1) {
+                && ($u->cflags & Contact::CF_UDISABLED) === 0) {
                 $this->invariant_error("anonymous_user_enabled", "anonymous user {$u->email} is not disabled");
             }
 
@@ -427,7 +442,7 @@ class ConfInvariants {
 
             // whitespace is simplified
             $t = " ";
-            foreach ([$u->firstName, $u->lastName, $u->email, $u->affiliation] as $s) {
+            foreach ([$u->firstName, $u->lastName, $u->email, $u->affiliation, $u->unaccentedName] as $s) {
                 if ($s !== "")
                     $t .= "{$s} ";
             }
@@ -443,8 +458,18 @@ class ConfInvariants {
             }
 
             // disabled has only expected bits
-            if (($u->disabled & ~Contact::DISABLEMENT_DB) !== 0) {
-                $this->invariant_error("user_disabled", "user {$u->email}/{$u->contactId} is funkily disabled");
+            if (($u->disabled & Contact::CFM_DISABLEMENT & ~Contact::CFM_DB) !== 0) {
+                $this->invariant_error("user_disabled", sprintf("user {$u->email}/{$u->contactId} bad disabled %x", $u->disabled));
+            }
+
+            // cflags has only expected bits
+            if (($u->cflags & ~Contact::CFM_DB) !== 0) {
+                $this->invariant_error("user_cflags", sprintf("user {$u->email}/{$u->contactId} bad cflags %x", $u->cflags));
+            }
+
+            // cflags reflects disabled
+            if ($u->disabled !== ($u->cflags & Contact::CFM_DISABLEMENT)) {
+                $this->invariant_error("user_cflags_disabled", sprintf("user {$u->email}/{$u->contactId} disabled %x unreflected in cflags %x", $u->disabled, $u->cflags));
             }
 
             // contactTags is a valid tag string
@@ -575,5 +600,62 @@ class ConfInvariants {
     static function test_document_inactive(Conf $conf, $prefix = null) {
         $prefix = $prefix ?? caller_landmark() . ": ";
         return (new ConfInvariants($conf, $prefix))->check_document_inactive()->ok();
+    }
+}
+
+class ConfInvariant_AutomaticTagChecker {
+    /** @var string */
+    public $tag;
+    /** @var TagInfo */
+    public $dt;
+    /** @var Contact */
+    public $user;
+    /** @var string */
+    public $clause;
+    /** @var SearchTerm */
+    public $term;
+    /** @var ?float */
+    public $value_constant;
+    /** @var ?callable(PaperInfo,?int,Contact):mixed */
+    public $value_formula;
+    /** @var bool */
+    public $reported = false;
+
+    function __construct(TagInfo $dt) {
+        $this->tag = $dt->tag;
+        $this->dt = $dt;
+        $this->user = $dt->conf->root_user();
+        $this->term = (new PaperSearch($this->user, [
+            "q" => $dt->automatic_search() ?? "ALL", "t" => "all"
+        ]))->full_term();
+        $ftext = $dt->automatic_formula_expression();
+        if (($ftext ?? "0") === "0") {
+            $this->value_constant = 0.0;
+            $vsfx = "#0";
+        } else {
+            $f = new Formula($ftext);
+            if ($f->check($this->user)) {
+                $this->value_formula = $f->compile_function();
+            }
+            $vsfx = "";
+        }
+        $this->clause = "(({$dt->automatic_search()}) XOR #{$dt->tag}{$vsfx})";
+    }
+
+    /** @return ?float */
+    function expected_value(PaperInfo $row) {
+        if (!$this->term->test($row, null)) {
+            return null;
+        } else if ($this->value_formula) {
+            $v = call_user_func($this->value_formula, $row, null, $this->user);
+            if (is_bool($v)) {
+                $v = $v ? 0.0 : null;
+            } else if (is_int($v)) {
+                $v = (float) $v;
+            }
+            return $v;
+        } else {
+            return $this->value_constant;
+        }
     }
 }

@@ -12,6 +12,13 @@ class AuthorMatch_SearchTerm extends SearchTerm {
         parent::__construct($type);
         $this->user = $user;
         $this->matcher = $matcher;
+        $regex = $matcher->general_pregexes();
+        if ($type !== "comatch") {
+            $this->set_float("fhl:au", $regex);
+        }
+        if ($type !== "aumatch") {
+            $this->set_float("fhl:co", $regex);
+        }
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
         $type = $sword->kwdef->name;
@@ -60,17 +67,7 @@ class AuthorMatch_SearchTerm extends SearchTerm {
         }
         return false;
     }
-    function prepare_visit($param, PaperSearch $srch) {
-        if ($param->want_field_highlighter()) {
-            if ($this->type !== "comatch") {
-                $srch->add_field_highlighter("au", $this->matcher->general_pregexes());
-            }
-            if ($this->type !== "aumatch") {
-                $srch->add_field_highlighter("co", $this->matcher->general_pregexes());
-            }
-        }
-    }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

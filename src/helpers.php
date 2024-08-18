@@ -1,11 +1,12 @@
 <?php
 // helpers.php -- HotCRP non-class helper functions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 // string helpers
 
 /** @param null|int|string $value
- * @return int */
+ * @return int
+ * @deprecated */
 function cvtint($value, $default = -1) {
     $v = trim((string) $value);
     if (is_numeric($v)) {
@@ -15,6 +16,38 @@ function cvtint($value, $default = -1) {
         }
     }
     return $default;
+}
+
+/** @param null|int|string $s
+ * @return ?int */
+function stoi($s) {
+    if ($s === null || is_int($s)) {
+        return $s;
+    }
+    $v = trim((string) $s);
+    if (!is_numeric($v)) {
+        return null;
+    }
+    $iv = intval($v);
+    if ($iv != floatval($v)) {
+        return null;
+    }
+    return $iv;
+}
+
+/** @param null|int|float|string $s
+ * @return null|int|float */
+function stonum($s) {
+    if ($s === null || is_int($s) || is_float($s)) {
+        return $s;
+    }
+    $v = trim((string) $s);
+    if (!is_numeric($v)) {
+        return null;
+    }
+    $iv = intval($v);
+    $fv = floatval($v);
+    return $iv == $fv ? $iv : $fv;
 }
 
 /** @param null|int|float|string $value
@@ -65,31 +98,23 @@ function hoturl_add_raw($url, $component) {
     return $url . (strpos($url, "?") === false ? "?" : "&") . $component;
 }
 
-/** @param string $page
- * @param null|string|array $param
- * @return string
- * @deprecated */
-function hoturl($page, $param = null) {
-    return Conf::$main->hoturl($page, $param);
-}
-
-/** @deprecated */
-function hoturl_post($page, $param = null) {
-    return Conf::$main->hoturl($page, $param, Conf::HOTURL_POST);
-}
-
 
 class JsonResult implements JsonSerializable, ArrayAccess {
     /** @var ?int */
     public $status;
     /** @var array<string,mixed> */
     public $content;
+    /** @var bool */
+    public $pretty_print;
+    /** @var bool */
+    public $minimal = false;
 
     /** @param int|array<string,mixed>|\stdClass|\JsonSerializable $a1
      * @param ?array<string,mixed> $a2 */
     function __construct($a1, $a2 = null) {
         if (is_int($a1)) {
             $this->status = $a1;
+            $a2 = $a2 ?? ($this->status <= 299);
         } else {
             $a2 = $a1;
         }
@@ -104,26 +129,21 @@ class JsonResult implements JsonSerializable, ArrayAccess {
                 assert(!($a2 instanceof JsonResult));
                 $this->content = (array) $a2;
             }
-        } else if (is_string($a2)) {
-            error_log("bad JsonResult with string " . debug_string_backtrace());
-            assert($this->status && $this->status > 299);
-            $this->content = ["ok" => false, "error" => $a2];
         } else {
             assert(is_associative_array($a2));
             $this->content = $a2;
         }
     }
 
-    /** @return JsonResult
-     * @deprecated */
-    static function make($jr, $arg2 = null) {
-        if ($jr instanceof JsonResult) {
-            return $jr;
-        } else if (is_int($jr)) {
-            return new JsonResult($jr, $arg2);
-        } else {
-            return new JsonResult($jr);
-        }
+    /** @param int $status
+     * @param array<string,mixed> $content
+     * @return JsonResult */
+    static function make_minimal($status, $content) {
+        $jr = new JsonResult(null);
+        $jr->status = $status;
+        $jr->content = $content;
+        $jr->minimal = true;
+        return $jr;
     }
 
     /** @param int $status
@@ -171,6 +191,14 @@ class JsonResult implements JsonSerializable, ArrayAccess {
     }
 
 
+    /** @param bool $pp
+     * @return $this */
+    function pretty_print($pp) {
+        $this->pretty_print = $pp;
+        return $this;
+    }
+
+
     #[\ReturnTypeWillChange]
     /** @param string $offset
      * @return bool */
@@ -201,9 +229,9 @@ class JsonResult implements JsonSerializable, ArrayAccess {
     }
 
 
-    /** @param ?bool $validated */
-    function emit($validated = null) {
-        if ($this->status) {
+    /** @param ?Qrequest $qreq */
+    function emit($qreq = null) {
+        if ($this->status && !$this->minimal) {
             if (!isset($this->content["ok"])) {
                 $this->content["ok"] = $this->status <= 299;
             }
@@ -213,20 +241,23 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         } else if (isset($this->content["status"])) {
             $this->status = $this->content["status"];
         }
-        if ($validated
-            ?? (Qrequest::$main_request && Qrequest::$main_request->valid_token())) {
+        if ($qreq && $qreq->valid_token()) {
             // Don’t set status on unvalidated requests, since that can leak
             // information (e.g. via <link prefetch onerror>).
             if ($this->status) {
                 http_response_code($this->status);
             }
-            header("Access-Control-Allow-Origin: *");
+            if (($origin = $qreq->header("Origin"))) {
+                header("Access-Control-Allow-Origin: {$origin}");
+            }
         }
         header("Content-Type: application/json; charset=utf-8");
-        if (Qrequest::$main_request && isset(Qrequest::$main_request->pprint)) {
-            $pprint = friendly_boolean(Qrequest::$main_request->pprint);
+        if ($qreq && isset($qreq->pprint)) {
+            $pprint = friendly_boolean($qreq->pprint);
+        } else if ($this->pretty_print !== null) {
+            $pprint = $this->pretty_print;
         } else {
-            $pprint = Contact::$main_user && Contact::$main_user->is_bearer_authorized();
+            $pprint = $qreq && $qreq->user() && $qreq->user()->is_bearer_authorized();
         }
         echo json_encode_browser($this->content, $pprint ? JSON_PRETTY_PRINT : 0), "\n";
     }
@@ -319,6 +350,7 @@ function actas_link($userlike) {
 }
 
 
+/** @return bool */
 function clean_tempdirs() {
     $dir = sys_get_temp_dir() ? : "/";
     while (substr($dir, -1) === "/") {
@@ -328,12 +360,13 @@ function clean_tempdirs() {
     $now = time();
     while (($fname = readdir($dirh)) !== false) {
         if (preg_match('/\Ahotcrptmp\d+\z/', $fname)
-            && is_dir("$dir/$fname")
-            && ($mtime = @filemtime("$dir/$fname")) !== false
+            && is_dir("{$dir}/{$fname}")
+            && ($mtime = @filemtime("{$dir}/{$fname}")) !== false
             && $mtime < $now - 1800)
-            rm_rf_tempdir("$dir/$fname");
+            rm_rf_tempdir("{$dir}/{$fname}");
     }
     closedir($dirh);
+    return true;
 }
 
 
@@ -349,8 +382,8 @@ function prefix_commajoin($what, $prefix, $joinword = "and") {
 }
 
 /** @param iterable $range
- * @return string */
-function numrangejoin($range) {
+ * @return list<string> */
+function unparse_numrange_list($range) {
     $a = [];
     $format = $first = $last = null;
     $intval = $plen = 0;
@@ -387,7 +420,13 @@ function numrangejoin($range) {
     } else if ($format !== null) {
         $a[] = $first . "–" . substr($last, $plen);
     }
-    return commajoin($a);
+    return $a;
+}
+
+/** @param iterable $range
+ * @return string */
+function numrangejoin($range) {
+    return commajoin(unparse_numrange_list($range));
 }
 
 /** @param int|float|array $n
@@ -403,14 +442,6 @@ function plural_word($n, $singular, $plural = null) {
     } else {
         return pluralize($singular);
     }
-}
-
-/** @param int|float|array $n
- * @param string $singular
- * @return string
- * @deprecated */
-function pluralx($n, $singular) {
-    return plural_word($n, $singular);
 }
 
 /** @param string $s
@@ -441,9 +472,14 @@ function pluralize($s) {
                && $len > 1
                && strpos("bcdfgjklmnpqrstvxz", $s[$len - 2]) !== false) {
         return substr($s, 0, $len - 1) . "ies";
-    } else if ($last === "t"
-               && $s === "that") {
-        return "those";
+    } else if ($last === "t") {
+        if ($s === "that") {
+            return "those";
+        } else if ($s === "it") {
+            return "them";
+        } else {
+            return "{$s}s";
+        }
     } else if ($last === ")"
                && preg_match('/\A(.*?)(\s*\([^)]*\))\z/', $s, $m)) {
         return pluralize($m[1]) . $m[2];
@@ -458,20 +494,16 @@ function pluralize($s) {
  * @return string */
 function plural($n, $singular, $plural = null) {
     $z = is_array($n) ? count($n) : $n;
-    return "$z " . plural_word($z, $singular, $plural);
+    return "{$z} " . plural_word($z, $singular, $plural);
 }
 
 /** @param int $n
  * @return string */
 function ordinal($n) {
-    $x = $n;
-    if ($x > 100) {
-        $x = $x % 100;
-    }
-    if ($x > 20) {
-        $x = $x % 10;
-    }
-    return $n . ($x < 1 || $x > 3 ? "th" : ($x == 1 ? "st" : ($x == 2 ? "nd" : "rd")));
+    $x = abs($n);
+    $x > 100 && ($x = $x % 100);
+    $x > 20 && ($x = $x % 10);
+    return $n . (["th", "st", "nd", "rd"])[$x > 3 ? 0 : $x];
 }
 
 /** @param int|float $n
@@ -556,7 +588,8 @@ function unparse_expertise($expertise) {
 }
 
 /** @param array{int,?int} $preference
- * @return string */
+ * @return string
+ * @deprecated */
 function unparse_preference($preference) {
     assert(is_array($preference)); // XXX remove
     $pv = $preference[0];
@@ -567,42 +600,13 @@ function unparse_preference($preference) {
     return $pv . unparse_expertise($ev);
 }
 
-/** @param array{int,?int} $preference
- * @return string */
-function unparse_preference_span($preference, $always = false) {
-    assert(is_array($preference)); // XXX remove
-    $pv = (int) $preference[0];
-    $ev = $preference[1];
-    $tv = (int) ($preference[2] ?? null);
-    if ($pv > 0 || (!$pv && $tv > 0)) {
-        $type = 1;
-    } else if ($pv < 0 || $tv < 0) {
-        $type = -1;
-    } else {
-        $type = 0;
-    }
-    $t = "";
-    if ($pv || $ev !== null || $always) {
-        $t .= "P" . unparse_number_pm_html($pv) . unparse_expertise($ev);
-    }
-    if ($tv && !$pv) {
-        $t .= ($t ? " " : "") . "T" . unparse_number_pm_html($tv);
-    }
-    if ($t !== "") {
-        $t = " <span class=\"asspref$type\">$t</span>";
-    }
-    return $t;
-}
-
 /** @param int $revtype
- * @param bool $unfinished
  * @param ?string $classes
  * @return string */
-function review_type_icon($revtype, $unfinished = false, $classes = null) {
+function review_type_icon($revtype, $classes = null) {
     // see also script.js:review_form
     assert(!!$revtype);
     return '<span class="rto rt' . $revtype
-        . ($revtype > 0 && $unfinished ? " rtinc" : "")
         . ($classes ? " " . $classes : "")
         . '" title="' . ReviewForm::$revtype_names_full[$revtype]
         . '"><span class="rti">' . ReviewForm::$revtype_icon_text[$revtype] . '</span></span>';

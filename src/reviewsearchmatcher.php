@@ -1,6 +1,6 @@
 <?php
 // reviewsearchmatcher.php -- HotCRP helper class for searching for reviews
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class ReviewSearchMatcher extends ContactCountMatcher {
     // `status` bits
@@ -8,7 +8,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
     const INCOMPLETE = 2;
     const INPROGRESS = 4;
     const NOTSTARTED = 8;
-    const NOTACCEPTED = 16;
+    const NOTACKNOWLEDGED = 16;
     const PENDINGAPPROVAL = 32;
     const MYREQUEST = 128;
     const APPROVED = 256;
@@ -49,12 +49,15 @@ class ReviewSearchMatcher extends ContactCountMatcher {
     /** @var ?ReviewFieldSearch<ReviewField> */
     private $rfsrch;
 
+    /** @var int */
+    static public $mode = 0;
+
     static private $status_map = [
         // preferred names come first
         "complete" => self::COMPLETE,
         "incomplete" => self::INCOMPLETE,
         "in-progress" => self::INPROGRESS,
-        "not-accepted" => self::NOTACCEPTED,
+        "unacknowledged" => self::NOTACKNOWLEDGED,
         "not-started" => self::NOTSTARTED,
         "pending-approval" => self::PENDINGAPPROVAL,
         "approved" => self::APPROVED,
@@ -70,10 +73,12 @@ class ReviewSearchMatcher extends ContactCountMatcher {
         "my-request" => self::MYREQUEST,
         "myrequest" => self::MYREQUEST,
         "not-done" => self::INCOMPLETE,
-        "notaccepted" => self::NOTACCEPTED,
+        "not-acknowledged" => self::NOTACKNOWLEDGED,
+        "not-accepted" => self::NOTACKNOWLEDGED,
+        "notaccepted" => self::NOTACKNOWLEDGED,
         "notdone" => self::INCOMPLETE,
         "notstarted" => self::NOTSTARTED,
-        "outstanding" => self::NOTACCEPTED,
+        "outstanding" => self::NOTACKNOWLEDGED,
         "partial" => self::INPROGRESS,
         "pending" => self::PENDINGAPPROVAL,
         "pendingapproval" => self::PENDINGAPPROVAL,
@@ -183,7 +188,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
         } else if ($allow_generic && strcasecmp($word, "any") === 0) {
             $r = array_keys($conf->defined_rounds());
         } else if (strpos($word, "*") === false) {
-            if (($round = $conf->round_number($word, false)) !== null) {
+            if (($round = $conf->round_number($word)) !== null) {
                 $r = [$round];
             } else {
                 return null;
@@ -201,7 +206,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
      * @return bool */
     function apply_round($word, Conf $conf) {
         if ($this->round_list !== null
-            || ($round = $conf->round_number($word, false)) === null) {
+            || ($round = $conf->round_number($word)) === null) {
             return false;
         }
         $this->round_list = [$round];
@@ -322,7 +327,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
         if (($this->status & self::PENDINGAPPROVAL) !== 0) {
             $swhere[] = "(reviewSubmitted is null and timeApprovalRequested>0)";
         }
-        if (($this->status & self::NOTACCEPTED) !== 0) {
+        if (($this->status & self::NOTACKNOWLEDGED) !== 0) {
             $swhere[] = "reviewModified<1";
         } else if (($this->status & self::NOTSTARTED) !== 0) {
             $swhere[] = "reviewModified<2";
@@ -380,7 +385,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
         }
         if ($this->status !== 0) {
             if ((($this->status & self::COMPLETE) !== 0
-                 && $rrow->reviewStatus < ReviewInfo::RS_ADOPTED)
+                 && $rrow->reviewStatus < ReviewInfo::RS_APPROVED)
                 || (($this->status & self::SUBMITTED) !== 0
                     && $rrow->reviewStatus < ReviewInfo::RS_COMPLETED)
                 || (($this->status & self::INCOMPLETE) !== 0
@@ -388,14 +393,14 @@ class ReviewSearchMatcher extends ContactCountMatcher {
                 || (($this->status & self::INPROGRESS) !== 0
                     && $rrow->reviewStatus !== ReviewInfo::RS_DRAFTED
                     && $rrow->reviewStatus !== ReviewInfo::RS_DELIVERED)
-                || (($this->status & self::NOTACCEPTED) !== 0
-                    && $rrow->reviewStatus >= ReviewInfo::RS_ACCEPTED)
+                || (($this->status & self::NOTACKNOWLEDGED) !== 0
+                    && $rrow->reviewStatus >= ReviewInfo::RS_ACKNOWLEDGED)
                 || (($this->status & self::NOTSTARTED) !== 0
                     && $rrow->reviewStatus >= ReviewInfo::RS_DRAFTED)
                 || (($this->status & self::PENDINGAPPROVAL) !== 0
                     && $rrow->reviewStatus !== ReviewInfo::RS_DELIVERED)
                 || (($this->status & self::APPROVED) !== 0
-                    && $rrow->reviewStatus !== ReviewInfo::RS_ADOPTED)
+                    && $rrow->reviewStatus !== ReviewInfo::RS_APPROVED)
                 || (($this->status & self::MYREQUEST) !== 0
                     && $rrow->requestedBy != $user->contactId)) {
                 return false;
@@ -418,7 +423,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
                 return false;
             }
         } else if ($rrow->reviewType > 0
-                   && $rrow->reviewStatus < ReviewInfo::RS_ADOPTED
+                   && $rrow->reviewStatus < ReviewInfo::RS_APPROVED
                    && $rrow->reviewNeedsSubmit <= 0
                    && ($this->sensitivity & (self::HAS_STATUS | self::HAS_RTYPE)) === 0) {
             // don't count delegated reviews unless contacts, status, or type given
@@ -451,11 +456,16 @@ class ReviewSearchMatcher extends ContactCountMatcher {
                 return false;
             }
         }
-        if ($this->rfsrch
-            && ($this->rfsrch->rf->view_score <= $user->view_score_bound($prow, $rrow)
-                || $this->rfsrch->finished < 0
-                || !$this->rfsrch->test_review($user, $prow, $rrow))) {
-            return false;
+        if ($this->rfsrch) {
+            if ($this->rfsrch->finished < 0) {
+                return false;
+            }
+            $rf = $this->rfsrch->rf;
+            if ($rf->view_score <= $user->view_score_bound($prow, $rrow)
+                || !$rf->test_exists($rrow)
+                || !$this->rfsrch->test_value($rrow, $rrow->fields[$rf->order])) {
+                return false;
+            }
         }
         return true;
     }

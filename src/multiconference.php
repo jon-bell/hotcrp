@@ -1,6 +1,6 @@
 <?php
 // multiconference.php -- HotCRP multiconference installations
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Multiconference {
     /** @var array<string,?Conf> */
@@ -12,20 +12,20 @@ class Multiconference {
 
         $confid = $confid ?? $Opt["confid"] ?? null;
         if ($confid === null && PHP_SAPI !== "cli") {
-            $base = Navigation::get()->base_absolute(true);
-            if (($multis = $Opt["multiconferenceAnalyzer"] ?? null)) {
-                foreach (is_array($multis) ? $multis : [$multis] as $multi) {
-                    list($match, $replace) = explode(" ", $multi);
-                    if (preg_match("`\\A{$match}`", $base, $m)) {
-                        $confid = $replace;
-                        for ($i = 1; $i < count($m); ++$i) {
-                            $confid = str_replace("\${$i}", $m[$i], $confid);
+            $nav = Navigation::get();
+            if (($max = $Opt["multiconferenceAnalyzer"] ?? null)) {
+                if (is_string($max)) {
+                    $confid = self::test_multiconference_analyzer($max, $nav);
+                } else {
+                    foreach ($max as $ma) {
+                        if (($confid = self::test_multiconference_analyzer($ma, $nav))) {
+                            break;
                         }
-                        break;
                     }
                 }
-            } else if (preg_match('/\/([^\/]+)\/\z/', $base, $m)) {
-                $confid = $m[1];
+            } else if ($nav->base_path !== "/") {
+                $slash = strrpos($nav->base_path, "/", -2);
+                $confid = substr($nav->base_path, $slash + 1, -1);
             }
         }
 
@@ -39,6 +39,42 @@ class Multiconference {
         }
     }
 
+    /** @param string $ma
+     * @param NavigationState $nav
+     * @return ?string */
+    static private function test_multiconference_analyzer($ma, $nav) {
+        $sp = strpos($ma, " ");
+        $p = 0;
+        if ($sp === 1) {
+            $t = $ma[0];
+            $p = 2;
+            $sp = strpos($ma, " ", 2);
+        } else {
+            $t = "b";
+        }
+        if ($sp === false) {
+            return null;
+        }
+        if ($t === "b") {
+            $subject = $nav->base_absolute(true);
+        } else if ($t === "h") {
+            $subject = strtolower($nav->host);
+        } else if ($t === "p") {
+            $subject = $nav->base_path;
+        } else {
+            return null;
+        }
+        if (!preg_match("\1\\A" . substr($ma, $p, $sp - $p) . "\1", $subject, $m)) {
+            return null;
+        }
+        $confid = substr($ma, $sp + 1);
+        for ($i = 1; isset($m[$i]); ++$i) {
+            $confid = str_replace("\${$i}", $m[$i], $confid);
+        }
+        return $confid;
+    }
+
+
     /** @param ?string $root
      * @param string $confid
      * @return ?Conf */
@@ -46,11 +82,11 @@ class Multiconference {
         if (self::$conf_cache === null) {
             self::$conf_cache = [];
             if (Conf::$main && ($xconfid = Conf::$main->opt("confid"))) {
-                self::$conf_cache[SiteLoader::$root . "{}{$xconfid}"] = Conf::$main;
+                self::$conf_cache[SiteLoader::$root . "\0{$xconfid}"] = Conf::$main;
             }
         }
         $root = $root ?? SiteLoader::$root;
-        $key = "{$root}{}{$confid}";
+        $key = "{$root}\0{$confid}";
         if (!array_key_exists($key, self::$conf_cache)) {
             self::$conf_cache[$key] = self::load_conf($root, $confid);
         }
@@ -69,7 +105,7 @@ class Multiconference {
         SiteLoader::read_options_file("{$root}/conf/options.php");
         $Opt["confid"] = $confid;
         if ($Opt["include"] ?? null) {
-            SiteLoader::read_included_options();
+            SiteLoader::read_included_options($root);
         }
         $newconf = ($Opt["missing"] ?? null) ? null : new Conf($Opt, true);
         $Opt = $save_opt;
@@ -132,8 +168,8 @@ class Multiconference {
             if ($maintenance) {
                 $j["maintenance"] = true;
             }
-            echo json_encode($j), "\n";
-            exit;
+            echo json_encode_browser($j), "\n";
+            exit();
         }
 
         http_response_code($status);
@@ -148,7 +184,7 @@ class Multiconference {
         }
         echo '<div class="msg mx-auto msg-error">', MessageSet::feedback_html($mis), '</div>';
         $qreq->print_footer();
-        exit;
+        exit();
     }
 
     /** @return Qrequest */
@@ -268,42 +304,9 @@ class Multiconference {
     }
 
     /** @param Throwable $ex
-     * @suppress PhanUndeclaredProperty */
+     * @suppress PhanUndeclaredProperty
+     * @deprecated */
     static function batch_exception_handler($ex) {
-        global $argv;
-        $s = $ex->getMessage();
-        if (defined("HOTCRP_TESTHARNESS") || $ex instanceof Error) {
-            $s = $ex->getFile() . ":" . $ex->getLine() . ": " . $s;
-        }
-        if (strpos($s, ":") === false) {
-            $script = $argv[0] ?? "";
-            if (($slash = strrpos($script, "/")) !== false) {
-                if (($slash === 5 && str_starts_with($script, "batch"))
-                    || ($slash > 5 && substr_compare($script, "/batch", $slash - 6, 6) === 0)) {
-                    $slash -= 6;
-                }
-                $script = substr($script, $slash + 1);
-            }
-            if ($script !== "") {
-                $s = "{$script}: {$s}";
-            }
-        }
-        if (substr($s, -1) !== "\n") {
-            $s = "{$s}\n";
-        }
-        if (property_exists($ex, "getopt")
-            && $ex->getopt instanceof Getopt) {
-            $s .= $ex->getopt->short_usage();
-        }
-        if (defined("HOTCRP_TESTHARNESS") || $ex instanceof Error) {
-            $s .= debug_string_backtrace($ex) . "\n";
-        }
-        fwrite(STDERR, $s);
-        if (property_exists($ex, "exitStatus")
-            && is_int($ex->exitStatus)) {
-            exit($ex->exitStatus);
-        } else {
-            exit(3);
-        }
+        return BatchProcess::exception_handler($ex);
     }
 }

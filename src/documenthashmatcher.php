@@ -1,6 +1,6 @@
 <?php
 // documenthashmatcher.php -- document helper class for HotCRP papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class DocumentHashMatcher {
     /** @var string */
@@ -116,8 +116,10 @@ class DocumentHashMatcher {
         }
         return "{\\A" . $preg . $entrypat . "\\z}";
     }
+    /** @param null|false|string $hash
+     * @return bool */
     function test_hash($hash) {
-        return $hash !== false
+        return (string) $hash !== ""
             && preg_match('{\A' . $this->algo_pfx_preg . $this->hash_preg . '\z}', $hash);
     }
 }

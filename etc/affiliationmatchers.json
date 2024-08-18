@@ -133,6 +133,9 @@
     "di": {
         "weak": true, "nameish": true
     },
+    "md": {
+        "weak": true
+    },
     "jr": {
         "weak": true, "nameish": true
     },
@@ -711,6 +714,9 @@
     "korea": {
         "alternate": [{"word": "kaist", "if": "advanced institute science technology"}]
     },
+    "law": {
+        "weak": true
+    },
     "london": {
         "weak": true,
         "alternate": [{"word": "ucl", "if": "university college"}]
@@ -752,11 +758,17 @@
     "msr": {
         "alternate": ["microsoft research"]
     },
+    "nau": {
+        "alternate": ["northern arizona university"]
+    },
     "ncsu": {
         "alternate": ["north carolina state university"]
     },
     "nist": {
         "alternate": ["national institute standards technology"]
+    },
+    "northern": {
+        "sync": ["arizona", "illinois"]
     },
     "nus": {
         "alternate": ["national university singapore"]
@@ -952,7 +964,8 @@
         "weak": true,
         "alternate": [
             {"word": "nyu", "if": "new university"}
-        ]
+        ],
+        "sync": ["new"]
     },
     "zurich": {
         "weak": true

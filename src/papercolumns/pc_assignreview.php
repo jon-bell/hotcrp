@@ -6,7 +6,7 @@ class AssignReview_PaperColumn extends PaperColumn {
     /** @var Contact */
     private $contact;
     /** @var bool */
-    private $basicheader = false;
+    private $simple = false;
     /** @var array<int,int> */
     private $sortmap;
     function __construct(Conf $conf, $cj) {
@@ -16,8 +16,8 @@ class AssignReview_PaperColumn extends PaperColumn {
         }
     }
     function add_decoration($decor) {
-        if ($decor === "basicheader") {
-            $this->basicheader = true;
+        if ($decor === "simple") {
+            $this->simple = true;
             return $this->__add_decoration($decor);
         } else {
             return parent::add_decoration($decor);
@@ -32,7 +32,7 @@ class AssignReview_PaperColumn extends PaperColumn {
         return $this->contact;
     }
     function header(PaperList $pl, $is_text) {
-        if ($this->basicheader) {
+        if ($this->simple) {
             return "Assignment";
         } else if ($is_text) {
             return $pl->user->reviewer_text_for($this->contact) . " assignment";
@@ -74,7 +74,7 @@ class AssignReview_PaperColumn extends PaperColumn {
         } else {
             $rt = ReviewInfo::unparse_type(min(max($ci->reviewType, 0), REVIEW_META));
         }
-        $rs = $ci->reviewSubmitted ? " s" : "";
+        $rs = $ci->review_submitted() ? " s" : "";
         $pl->need_render = true;
         $t = '<span class="need-assignment-selector';
         if (!$this->contact->can_accept_review_assignment_ignore_conflict($row)

@@ -3,8 +3,11 @@
 // Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Authors_PaperOption extends PaperOption {
+    /** @var int */
+    private $max_count;
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
+        $this->max_count = $args->max ?? 0;
     }
     function author_list(PaperValue $ov) {
         return PaperInfo::parse_author_list($ov->data() ?? "");
@@ -37,9 +40,8 @@ class Authors_PaperOption extends PaperOption {
             $ov->estop($this->conf->_("<0>Entry required"));
             $ov->msg_at("authors:1", null, MessageSet::ERROR);
         }
-        $max_authors = $this->conf->opt("maxAuthors");
-        if ($max_authors > 0 && $nreal > $max_authors) {
-            $ov->estop($this->conf->_("<0>A submission may have at most {0} authors", $max_authors));
+        if ($this->max_count > 0 && $nreal > $this->max_count) {
+            $ov->estop($this->conf->_("<0>A {submission} may have at most {max} authors", new FmtArg("max", $this->max_count)));
         }
 
         $msg1 = $msg2 = false;
@@ -104,15 +106,6 @@ class Authors_PaperOption extends PaperOption {
         $ps->checkpoint_conflict_values();
         return true;
     }
-    static private function translate_qreq(Qrequest $qreq) {
-        $n = 1;
-        while (isset($qreq["authors:email_{$n}"]) || isset($qreq["auemail{$n}"])) {
-            $qreq["authors:{$n}:email"] = $qreq["authors:email_{$n}"] ?? $qreq["auemail{$n}"];
-            $qreq["authors:{$n}:name"] = $qreq["authors:name_{$n}"] ?? $qreq["auname{$n}"];
-            $qreq["authors:{$n}:affiliation"] = $qreq["authors:affiliation_{$n}"] ?? $qreq["auaff{$n}"];
-            ++$n;
-        }
-    }
     static private function expand_author(Author $au, PaperInfo $prow) {
         if ($au->email !== ""
             && ($aux = $prow->author_by_email($au->email))) {
@@ -126,9 +119,6 @@ class Authors_PaperOption extends PaperOption {
         }
     }
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
-        if (!isset($qreq["authors:1:email"])) {
-            self::translate_qreq($qreq);
-        }
         $v = [];
         $auth = new Author;
         for ($n = 1; true; ++$n) {
@@ -191,7 +181,7 @@ class Authors_PaperOption extends PaperOption {
         return $ov;
     }
 
-    private function editable_author_component_entry($pt, $n, $component, $au, $reqau, $ignore_diff, $readonly) {
+    private function editable_author_component_entry($pt, $n, $component, $au, $reqau, $ignore_diff) {
         if ($component === "name") {
             $js = ["size" => "35", "placeholder" => "Name", "autocomplete" => "off", "aria-label" => "Author name"];
             $auval = $au ? $au->name(NAME_PARSABLE) : "";
@@ -213,12 +203,9 @@ class Authors_PaperOption extends PaperOption {
         if ($val !== $auval) {
             $js["data-default-value"] = $auval;
         }
-        if ($readonly) {
-            $js["readonly"] = true;
-        }
         return Ht::entry("authors:{$n}:{$component}", $val, $js);
     }
-    private function echo_editable_authors_line($pt, $n, $au, $reqau, $shownum, $readonly) {
+    private function echo_editable_authors_line($pt, $n, $au, $reqau, $shownum) {
         // on new paper, default to editing user as first author
         $ignore_diff = false;
         if ($n === 1
@@ -231,13 +218,13 @@ class Authors_PaperOption extends PaperOption {
 
         echo '<div class="author-entry draggable d-flex">';
         if ($shownum) {
-            echo '<div class="flex-grow-0"><button type="button" class="draghandle ui js-dropmenu-open ui-drag row-order-draghandle need-tooltip need-dropmenu" draggable="true" title="Click or drag to reorder" data-tooltip-anchor="e"></button></div>',
+            echo '<div class="flex-grow-0"><button type="button" class="draghandle ui js-dropmenu-open ui-drag row-order-draghandle need-tooltip need-dropmenu" draggable="true" title="Click or drag to reorder" data-tooltip-anchor="e">&zwnj;</button></div>',
                 '<div class="flex-grow-0 row-counter">', $n, '.</div>';
         }
         echo '<div class="flex-grow-1">',
-            $this->editable_author_component_entry($pt, $n, "email", $au, $reqau, $ignore_diff, $readonly), ' ',
-            $this->editable_author_component_entry($pt, $n, "name", $au, $reqau, $ignore_diff, $readonly), ' ',
-            $this->editable_author_component_entry($pt, $n, "affiliation", $au, $reqau, $ignore_diff,$readonly),
+            $this->editable_author_component_entry($pt, $n, "email", $au, $reqau, $ignore_diff), ' ',
+            $this->editable_author_component_entry($pt, $n, "name", $au, $reqau, $ignore_diff), ' ',
+            $this->editable_author_component_entry($pt, $n, "affiliation", $au, $reqau, $ignore_diff),
             $pt->messages_at("authors:{$n}"),
             $pt->messages_at("authors:{$n}:email"),
             $pt->messages_at("authors:{$n}:name"),
@@ -255,10 +242,8 @@ class Authors_PaperOption extends PaperOption {
         $pt->print_editable_option_papt($this, $title, [
             "id" => "authors", "for" => false
         ]);
-        $readonly = !$this->test_editable($ov->prow);
 
-        $max_authors = (int) $this->conf->opt("maxAuthors");
-        $min_authors = $max_authors > 0 ? min(5, $max_authors) : 5;
+        $min_authors = $this->max_count > 0 ? min(5, $this->max_count) : 5;
 
         $aulist = $this->author_list($ov);
         $reqaulist = $this->author_list($reqov);
@@ -268,28 +253,66 @@ class Authors_PaperOption extends PaperOption {
         }
         $nau = max($nreqau, count($aulist), $min_authors);
         if (($nau === $nreqau || $nau === count($aulist))
-            && ($max_authors <= 0 || $nau + 1 <= $max_authors)) {
+            && ($this->max_count <= 0 || $nau + 1 <= $this->max_count)) {
             ++$nau;
         }
         $ndigits = (int) ceil(log10($nau + 1));
 
         echo '<div class="papev">',
             '<div id="authors:container" class="js-row-order need-row-order-autogrow" data-min-rows="', $min_authors, '"',
-            $max_authors > 0 ? " data-max-rows=\"{$max_authors}\"" : "",
+            $this->max_count > 0 ? " data-max-rows=\"{$this->max_count}\"" : "",
             ' data-row-counter-digits="', $ndigits,
             '" data-row-template="authors:row-template">';
         for ($n = 1; $n <= $nau; ++$n) {
-            $this->echo_editable_authors_line($pt, $n, $aulist[$n-1] ?? null, $reqaulist[$n-1] ?? null, $max_authors !== 1, $readonly);
+            $this->echo_editable_authors_line($pt, $n, $aulist[$n-1] ?? null, $reqaulist[$n-1] ?? null, $this->max_count !== 1);
         }
         echo '</div>';
         echo '<template id="authors:row-template" class="hidden">';
-        $this->echo_editable_authors_line($pt, '$', null, null, $max_authors !== 1, $readonly);
+        $this->echo_editable_authors_line($pt, '$', null, null, $this->max_count !== 1);
         echo "</template></div></div>\n\n";
     }
 
+    function field_fmt_context() {
+        return [new FmtArg("max", $this->max_count)];
+    }
+
     function render(FieldRender $fr, PaperValue $ov) {
-        if ($fr->table) {
+        if ($fr->want(FieldRender::CFPAGE)) {
             $fr->table->render_authors($fr, $this);
+        } else {
+            $names = ["<ul class=\"x namelist\">"];
+            foreach ($this->author_list($ov) as $au) {
+                $n = htmlspecialchars(trim("{$au->firstName} {$au->lastName}"));
+                if ($au->email !== "") {
+                    $ehtml = htmlspecialchars($au->email);
+                    $e = "&lt;<a href=\"mailto:{$ehtml}\" class=\"q\">{$ehtml}</a>&gt;";
+                } else {
+                    $e = "";
+                }
+                $t = ($n === "" ? $e : $n);
+                if ($au->affiliation !== "") {
+                    $t .= " <span class=\"auaff\">(" . htmlspecialchars($au->affiliation) . ")</span>";
+                }
+                if ($n !== "" && $e !== "") {
+                    $t .= " " . $e;
+                }
+                $names[] = "<li class=\"odname\">{$t}</li>";
+            }
+            $names[] = "</ul>";
+            $fr->set_html(join("", $names));
         }
+    }
+
+    function jsonSerialize() {
+        $j = parent::jsonSerialize();
+        if ($this->max_count > 0) {
+            $j->max = $this->max_count;
+        }
+        return $j;
+    }
+    function export_setting() {
+        $sfs = parent::export_setting();
+        $sfs->max = $this->max_count;
+        return $sfs;
     }
 }

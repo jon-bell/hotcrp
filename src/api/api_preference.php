@@ -3,7 +3,7 @@
 // Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Preference_API {
-    static function pref_api(Contact $user, Qrequest $qreq, PaperInfo $prow = null) {
+    static function pref_api(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
         $overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
         $u = APIHelpers::parse_reviewer_for($qreq->u ?? $qreq->reviewer, $user, $prow);
         $user->set_overrides($overrides);
@@ -18,12 +18,12 @@ class Preference_API {
             }
         }
         if (!$user->can_edit_preference_for($u, $prow)) {
-            return JsonResult::make_error(403, "<0>Can’t edit preference for #{$prow->paperId}");
+            return JsonResult::make_error(200, "<0>Can’t edit preference for #{$prow->paperId}");
         }
 
         if ($qreq->method() === "POST" || isset($qreq->pref)) {
             $aset = new AssignmentSet($user);
-            $aset->set_overrides(true);
+            $aset->set_override_conflicts(true);
             $aset->enable_papers($prow);
             $aset->parse("paper,user,preference\n{$prow->paperId}," . CsvGenerator::quote($u->email) . "," . CsvGenerator::quote($qreq->pref, true));
             if (!$aset->execute()) {
@@ -32,14 +32,14 @@ class Preference_API {
             $prow->load_preferences();
         }
 
-        $pref = $prow->preference($u, true);
-        $value = unparse_preference($pref);
-        $jr = new JsonResult(["ok" => true, "value" => $value === "0" ? "" : $value, "pref" => $pref[0]]);
-        if ($pref[1] !== null) {
-            $jr->content["prefexp"] = unparse_expertise($pref[1]);
+        $pf = $prow->preference($u);
+        $value = $pf->unparse();
+        $jr = new JsonResult(["ok" => true, "value" => $value === "0" ? "" : $value, "pref" => $pf->preference]);
+        if ($pf->expertise !== null) {
+            $jr->content["prefexp"] = unparse_expertise($pf->expertise);
         }
         if ($user->conf->has_topics()) {
-            $jr->content["topic_score"] = $pref[2];
+            $jr->content["topic_score"] = $prow->topic_interest_score($u);
         }
         if ($qreq->method() === "POST" && $prow->timeWithdrawn > 0) {
             foreach ($prow->make_whynot(["withdrawn" => 1])->message_list(null, 1) as $mi) {

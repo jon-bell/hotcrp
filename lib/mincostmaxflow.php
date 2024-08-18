@@ -1,11 +1,11 @@
 <?php
 // mincostmaxflow.php -- HotCRP min-cost max-flow
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class MinCostMaxFlow_Node {
     /** @var string */
     public $name;
-    /** @var int */
+    /** @var int|string */
     public $vindex;
     /** @var ?string */
     public $klass;
@@ -141,9 +141,9 @@ class MinCostMaxFlow_Edge {
      * @return bool */
     function is_distance_admissible_from($v) {
         if ($v === $this->src) {
-            return $this->flow < $this->cap && $v->distance == $this->dst->distance + 1;
+            return $this->flow < $this->cap && $v->distance === $this->dst->distance + 1;
         } else {
-            return $this->flow > $this->mincap && $v->distance == $this->src->distance + 1;
+            return $this->flow > $this->mincap && $v->distance === $this->src->distance + 1;
         }
     }
     /** @param MinCostMaxFlow_Node $v
@@ -258,9 +258,17 @@ class MinCostMaxFlow {
     }
 
     /** @param callable(MinCostMaxFlow,int,...) $progressf
-     * @return void */
+     * @return void
+     * @deprecated */
     function add_progress_handler($progressf) {
         $this->progressf[] = $progressf;
+    }
+
+    /** @param callable(MinCostMaxFlow,int,...) $progressf
+     * @return $this */
+    function add_progress_function($progressf) {
+        $this->progressf[] = $progressf;
+        return $this;
     }
 
 
@@ -362,16 +370,8 @@ class MinCostMaxFlow {
      * @return list<MinCostMaxFlow_Node> */
     function upstream($v, $klass) {
         $a = [];
-        $this->add_downstream($this->start_dfs($v), $klass, $a);
+        $this->add_upstream($this->start_dfs($v), $klass, $a);
         return $a;
-    }
-
-    /** @param MinCostMaxFlow_Node|string $v
-     * @param ?string $klass
-     * @return list<MinCostMaxFlow_Node>
-     * @deprecated */
-    function reachable($v, $klass) {
-        return $this->downstream($v, $klass);
     }
 
     /** @param MinCostMaxFlow_Node $v
@@ -392,9 +392,7 @@ class MinCostMaxFlow {
     /** @param MinCostMaxFlow_Node|string $v
      * @return list<MinCostMaxFlow_Node> */
     function topological_sort($v, $klass) {
-        if (is_string($v)) {
-            $v = $this->vmap[$v];
-        }
+        $v = is_string($v) ? $this->vmap[$v] : $v;
         if (!$this->has_edges) {
             $this->initialize_edges();
         }
@@ -461,7 +459,7 @@ class MinCostMaxFlow {
      * @param MinCostMaxFlow_Node $src */
     private function pushrelabel_push_from($e, $src) {
         $amt = min($src->excess, $e->residual_cap_from($src));
-        $amt = ($src == $e->dst ? -$amt : $amt);
+        $amt = ($src === $e->dst ? -$amt : $amt);
         //fwrite(STDERR, "push {$amt} {$e->src->name}@{$e->src->distance} -> {$e->dst->name}@{$e->dst->distance}\n");
         $e->update_flow($amt);
     }
@@ -535,7 +533,7 @@ class MinCostMaxFlow {
         while ($l) {
             // check progress
             ++$n;
-            if ($n % 32768 == 0) {
+            if ($n % 32768 === 0) {
                 foreach ($this->progressf as $progressf) {
                     call_user_func($progressf, $this, self::PMAXFLOW);
                 }
@@ -550,7 +548,7 @@ class MinCostMaxFlow {
                 }
                 // global relabeling heuristic is quite useful
                 ++$this->nrelabel;
-                if ($this->nrelabel % count($this->v) == 0) {
+                if ($this->nrelabel % count($this->v) === 0) {
                     $this->pushrelabel_make_distance();
                 }
                 // if relabeled, put back on front
@@ -977,48 +975,57 @@ class MinCostMaxFlow {
      * @return string */
     private function dimacs_input($flags) {
         $mincost = ($flags & self::DIMACS_MINCOST) !== 0;
-        $x = ["p " . ($mincost ? "min" : "max") . " "
-              . count($this->v) . " " . count($this->e) . "\n"];
+        $header = [
+            "p " . ($mincost ? "min" : "max") . " " . count($this->v) . " " . count($this->e) . "\n"
+        ];
+        $names = ($flags & self::DIMACS_NAMES) !== 0;
         foreach ($this->v as $i => $v) {
-            $v->vindex = $i + 1;
+            $v->vindex = $names ? $v->name : $i + 1;
         }
         if ($mincost && $this->maxflow) {
-            $x[] = "n {$this->source->vindex} {$this->maxflow}\n";
-            $x[] = "n {$this->sink->vindex} -{$this->maxflow}\n";
+            $header[] = "n {$this->source->vindex} {$this->maxflow}\n";
+            $header[] = "n {$this->sink->vindex} -{$this->maxflow}\n";
         } else {
-            $x[] = "n {$this->source->vindex} s\n";
-            $x[] = "n {$this->sink->vindex} t\n";
+            $header[] = "n {$this->source->vindex} s\n";
+            $header[] = "n {$this->sink->vindex} t\n";
         }
-        foreach ($this->v as $v) {
-            if ($v !== $this->source && $v !== $this->sink) {
+        $names = ($flags & self::DIMACS_NAMES) !== 0;
+        if (!$names) {
+            foreach ($this->v as $v) {
+                if ($v === $this->source || $v === $this->sink) {
+                    continue;
+                }
                 $cmt = "c ninfo {$v->vindex} {$v->name}";
                 if ($v->klass !== "") {
                     $cmt .= " {$v->klass}";
                 }
-                $x[] = "$cmt\n";
+                $header[] = "{$cmt}\n";
             }
         }
-        $names = ($flags & self::DIMACS_NAMES) !== 0;
+        $x = [];
         foreach ($this->e as $e) {
-            $src = $names ? $e->src->name : $e->src->vindex;
-            $dst = $names ? $e->dst->name : $e->dst->vindex;
             if ($mincost) {
-                $x[] = "a $src $dst {$e->mincap} {$e->cap} {$e->cost}\n";
+                $x[] = "a {$e->src->vindex} {$e->dst->vindex} {$e->mincap} {$e->cap} {$e->cost}\n";
             } else {
-                $x[] = "a $src $dst {$e->cap}\n";
+                $x[] = "a {$e->src->vindex} {$e->dst->vindex} {$e->cap}\n";
             }
         }
-        return join("", $x);
+        if ($names) {
+            natsort($x);
+        }
+        return join("", $header) . join("", $x);
     }
 
-    /** @return string */
-    function maxflow_dimacs_input() {
-        return $this->dimacs_input(self::DIMACS_MAXFLOW);
+    /** @param bool $names
+     * @return string */
+    function maxflow_dimacs_input($names = false) {
+        return $this->dimacs_input(self::DIMACS_MAXFLOW | ($names ? self::DIMACS_NAMES : 0));
     }
 
-    /** @return string */
-    function mincost_dimacs_input() {
-        return $this->dimacs_input(self::DIMACS_MINCOST);
+    /** @param bool $names
+     * @return string */
+    function mincost_dimacs_input($names = false) {
+        return $this->dimacs_input(self::DIMACS_MINCOST | ($names ? self::DIMACS_NAMES : 0));
     }
 
 
@@ -1026,47 +1033,55 @@ class MinCostMaxFlow {
      * @return string */
     private function dimacs_output($flags) {
         $mincost = ($flags & self::DIMACS_MINCOST) !== 0;
-        $x = ["c p " . ($mincost ? "min" : "max") . " "
-              . count($this->v) . " " . count($this->e) . "\n"];
+        $header = [
+            "c p " . ($mincost ? "min" : "max") . " " . count($this->v) . " " . count($this->e) . "\n"
+        ];
+        $names = ($flags & self::DIMACS_NAMES) !== 0;
         foreach ($this->v as $i => $v) {
-            $v->vindex = $i + 1;
+            $v->vindex = $names ? $v->name : $i + 1;
         }
         if ($mincost) {
-            $x[] = "s " . $this->current_cost() . "\n";
-            $x[] = "c flow " . $this->current_flow() . "\n";
-            $x[] = "c min_epsilon " . $this->epsilon . "\n";
+            $header[] = "s " . $this->current_cost() . "\n";
+            $header[] = "c flow " . $this->current_flow() . "\n";
+            $header[] = "c min_epsilon " . $this->epsilon . "\n";
             foreach ($this->v as $v) {
-                if ($v->price != 0)
-                    $x[] = "c nprice {$v->vindex} {$v->price}\n";
+                if ($v->price != 0) {
+                    $header[] = "c nprice {$v->vindex} {$v->price}\n";
+                }
             }
         } else {
-            $x[] = "s " . $this->current_flow() . "\n";
+            $header[] = "s " . $this->current_flow() . "\n";
         }
+        $x = [];
         foreach ($this->e as $e) {
-            if ($e->flow) {
-                // is this flow ambiguous?
-                $n = 0;
-                foreach ($e->src->e as $ee) {
-                    if ($ee->dst === $e->dst)
-                        ++$n;
-                }
-                if ($n !== 1) {
-                    $x[] = "c finfo {$e->cap} {$e->cost}\n";
-                }
-                $x[] = "f {$e->src->vindex} {$e->dst->vindex} {$e->flow}\n";
+            if (!$e->flow) {
+                continue;
             }
+            // is this flow ambiguous?
+            $n = 0;
+            foreach ($e->src->e as $ee) {
+                if ($ee->dst === $e->dst)
+                    ++$n;
+            }
+            $t = $n !== 1 && !$names ? "c finfo {$e->cap} {$e->cost}\n" : "";
+            $x[] = "{$t}f {$e->src->vindex} {$e->dst->vindex} {$e->flow}\n";
         }
-        return join("", $x);
+        if ($names) {
+            natsort($x);
+        }
+        return join("", $header) . join("", $x);
     }
 
-    /** @return string */
-    function maxflow_dimacs_output() {
-        return $this->dimacs_output(self::DIMACS_MAXFLOW);
+    /** @param bool $names
+     * @return string */
+    function maxflow_dimacs_output($names = false) {
+        return $this->dimacs_output(self::DIMACS_MAXFLOW | ($names ? self::DIMACS_NAMES : 0));
     }
 
-    /** @return string */
-    function mincost_dimacs_output() {
-        return $this->dimacs_output(self::DIMACS_MINCOST);
+    /** @param bool $names
+     * @return string */
+    function mincost_dimacs_output($names = false) {
+        return $this->dimacs_output(self::DIMACS_MINCOST | ($names ? self::DIMACS_NAMES : 0));
     }
 
 

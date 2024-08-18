@@ -1,13 +1,13 @@
 <?php
 // help/h_chairsguide.php -- HotCRP help functions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class ChairsGuide_HelpTopic {
     static function print_presubmission(HelpRenderer $hth, $gj) {
         if ($gj->itemid === -1) {
             echo $hth->subhead("Submission time");
             echo "<p>Follow these steps to prepare to accept submissions.</p>\n\n<ol>\n";
-            $hth->print_group("chair/presubmission");
+            $hth->print_members("chair/presubmission");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -85,7 +85,7 @@ form also can include:</p>
         if ($gj->itemid === -1) {
             echo $hth->subhead("Assignments");
             echo "<p>After the submission deadline has passed:</p>\n<ol>\n";
-            $hth->print_group("chair/assignments");
+            $hth->print_members("chair/assignments");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -122,7 +122,7 @@ form also can include:</p>
   multi-track conferences.</li>\n";
 
         } else if ($gj->itemid === 6) {
-            echo "<li><p><strong>", $hth->hotlink("Collect review preferences from the PC.", "reviewprefs"), "</strong>
+            echo "<li><p><strong>", $hth->hotlink("Collect review preferences (bids) from the PC.", "reviewprefs"), "</strong>
   PC members can enter per-paper review preferences (also known as bids) to
   mark papers they want or don’t want to review. Preferences are integers, typically
   in the range −20 to 20; the higher the number, the more desired the review assignment.
@@ -131,9 +131,11 @@ form also can include:</p>
   convenient) page through the ", $hth->search_link("list of submitted papers", ""),
   " and set their preferences on the ", $hth->hotlink("paper pages", "paper"), ".</p>
 
-  <p>If desired, review preferences can be collected before the submission
-  deadline.  Select ", $hth->setting_link("“PC can see <em>all registered papers</em> until submission deadline”", "draft_submission_early_visibility"),
-  ", which allows PC members to see abstracts for registered papers that haven’t yet
+  <p>PC members can enter review preferences as soon as they can see submissions.
+  A “Review preferences” link will automatically appear on the site home page.
+  If desired, you can also collect preferences on unsubmitted abstracts; select ",
+    $hth->setting_link("“PC can view incomplete submissions until submission deadline”", "draft_submission_early_visibility"),
+  ", which allows the PC to see abstracts for registered papers that haven’t yet
   been submitted.</p></li>\n";
 
         } else if ($gj->itemid === 7) {
@@ -203,7 +205,7 @@ administrator’s identity.</p>\n\n";
         if ($gj->itemid === -1) {
             echo $hth->subhead("Before the meeting");
             echo "<ol>\n";
-            $hth->print_group("chair/premeeting");
+            $hth->print_members("chair/premeeting");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -263,7 +265,7 @@ administrator’s identity.</p>\n\n";
         if ($gj->itemid === -1) {
             echo $hth->subhead("At the meeting");
             echo "<ol>\n";
-            $hth->print_group("chair/atmeeting");
+            $hth->print_members("chair/atmeeting");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -293,7 +295,7 @@ administrator’s identity.</p>\n\n";
         } else if ($gj->itemid === 4) {
             echo "<li><p><strong>Shepherding (optional).</strong> If your conference uses
   shepherding for accepted papers, you can assign shepherds either ",
-  $hth->hotlink("paper by paper", "paper"), " or ", $hth->hotlink("automatically", "autoassign", "t=acc"), ".</p></li>\n";
+  $hth->hotlink("paper by paper", "paper"), " or ", $hth->hotlink("automatically", "autoassign", "t=accepted"), ".</p></li>\n";
         }
     }
 
@@ -301,7 +303,7 @@ administrator’s identity.</p>\n\n";
         if ($gj->itemid === -1) {
             echo $hth->subhead("After the meeting");
             echo "<ol>\n";
-            $hth->print_group("chair/postmeeting");
+            $hth->print_members("chair/postmeeting");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {

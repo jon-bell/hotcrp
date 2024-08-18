@@ -11,6 +11,8 @@ class Comment_API {
     private $prow;
     /** @var int */
     private $status = 200;
+    /** @var bool */
+    private $ok = true;
     /** @var MessageSet */
     private $ms;
 
@@ -95,7 +97,7 @@ class Comment_API {
         // empty
         if ($req["text"] === "" && empty($docs)) {
             if (!$qreq->delete && (!$xcrow->commentId || !isset($qreq->text))) {
-                $this->status = 400;
+                $this->ok = false;
                 $this->ms->error_at(null, "<0>Refusing to save empty comment");
                 return null;
             } else {
@@ -107,7 +109,7 @@ class Comment_API {
         $newctype = $xcrow->requested_type($req);
         $whyNot = $this->user->perm_edit_comment($this->prow, $xcrow, $newctype);
         if ($whyNot) {
-            $this->status = 403;
+            $this->ok = false;
             $whyNot->append_to($this->ms, null, 2);
             return null;
         }
@@ -151,19 +153,33 @@ class Comment_API {
 
         // save success messages
         $this->ms->append_item(self::save_success_message($xcrow));
-        if ($xcrow->notified_authors
-            && !$this->prow->has_author($suser)) {
-            if ($this->user->allow_view_authors($this->prow)) {
-                $this->ms->success($this->conf->_("<0>Notified submission authors", count($this->prow->author_list())));
-            } else {
-                $this->ms->success($this->conf->_("<0>Notified submission author(s)"));
+
+        $aunames = $mentions = [];
+        $mentions_missing = false;
+        foreach ($xcrow->notifications ?? [] as $n) {
+            if (($n->types & NotificationInfo::CONTACT) !== 0 && $n->sent) {
+                $aunames[] = $n->user->name_h(NAME_EB);
+            }
+            if (($n->types & NotificationInfo::MENTION) !== 0) {
+                if ($n->sent) {
+                    $mentions[] = $n->user_html ?? $suser->reviewer_html_for($n->user);
+                } else if ($xcrow->timeNotified === $xcrow->timeModified) {
+                    $mentions_missing = true;
+                }
             }
         }
-        if ($xcrow->saved_mentions) {
-            $this->ms->success($this->conf->_("<5>Notified mentioned users %#s", array_values($xcrow->saved_mentions)));
+        if ($aunames && !$this->prow->has_author($suser)) {
+            if ($this->user->allow_view_authors($this->prow)) {
+                $this->ms->success($this->conf->_("<5>Notified {submission} contacts {:nblist}", $aunames));
+            } else {
+                $this->ms->success($this->conf->_("<0>Notified {submission} contact(s)"));
+            }
         }
-        if ($xcrow->saved_mentions_missing) {
-            $this->ms->msg_at(null, $this->conf->_("<0>Some users mentioned in the comment cannot see the comment yet, so they were not notified."), MessageSet::WARNING_NOTE);
+        if ($mentions) {
+            $this->ms->success($this->conf->_("<5>Notified mentioned users {:nblist}", $mentions));
+        }
+        if ($mentions_missing) {
+            $this->ms->msg_at(null, $this->conf->_("<0>Some mentioned users cannot currently see this comment, so they were not notified."), MessageSet::WARNING_NOTE);
         }
         return $xcrow;
     }
@@ -246,16 +262,16 @@ class Comment_API {
         }
 
         // check post
-        if ($this->status === 200 && $qreq->is_post()) {
+        if ($this->status === 200 && $this->ok && $qreq->is_post()) {
             $crow = $this->run_post($qreq, $rrd, $crow);
         }
 
         if ($this->status === self::RESPONSE_REPLACED) {
             // report response replacement error
-            $jr = JsonResult::make_error(404, "<0>{uccmttype} was edited concurrently");
+            $jr = JsonResult::make_error(200, "<0>{$uccmttype} was edited concurrently");
             $jr["conflict"] = true;
         } else {
-            $jr = new JsonResult($this->status, ["ok" => $this->status <= 299]);
+            $jr = new JsonResult($this->status, ["ok" => $this->ok && $this->status <= 299]);
             if ($this->ms->has_message()) {
                 $jr["message_list"] = $this->ms->message_list();
             }

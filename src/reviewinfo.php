@@ -1,6 +1,6 @@
 <?php
 // reviewinfo.php -- HotCRP class representing reviews
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class ReviewInfo implements JsonSerializable {
     /** @var Conf */
@@ -33,7 +33,7 @@ class ReviewInfo implements JsonSerializable {
     public $reviewModified;
     /** @var ?int */
     public $reviewSubmitted;
-    /** @var ?int */
+    /** @var int */
     public $reviewAuthorSeen;
     /** @var int */
     public $timeDisplayed;
@@ -43,6 +43,8 @@ class ReviewInfo implements JsonSerializable {
     public $reviewNeedsSubmit;
     /** @var int */
     private $reviewViewScore;
+    /** @var int */
+    public $rflags;
     /** @var int */
     public $reviewStatus;
 
@@ -108,15 +110,42 @@ class ReviewInfo implements JsonSerializable {
     private $_reviewer;
     /** @var ?ReviewDiffInfo */
     private $_diff;
+    /** @var ?array<string,mixed> */
+    private $_old_prop;
 
     const VIEWSCORE_RECOMPUTE = -100;
 
     const RS_EMPTY = 0;
-    const RS_ACCEPTED = 1;
+    const RS_ACKNOWLEDGED = 1;
     const RS_DRAFTED = 2;
     const RS_DELIVERED = 3;
-    const RS_ADOPTED = 4;
+    const RS_APPROVED = 4;
     const RS_COMPLETED = 5;
+
+    const RF_LIVE = 1;
+    const RFM_TYPES = 0xFE;
+    const RF_ACKNOWLEDGED = 0x100;
+    const RF_DRAFTED = 0x200;
+    const RF_DELIVERED = 0x400;
+    const RF_APPROVED = 0x800;
+    const RF_SUBMITTED = 0x1000;
+    const RFM_NONDRAFT = 0x1C00; /* RF_DELIVERED | RF_APPROVED | RF_SUBMITTED */
+    const RFM_NONEMPTY = 0x1F00; /* RF_ACKNOWLEDGED | RF_DRAFTED | RFM_NONDRAFT */
+    const RF_BLIND = 0x10000;
+    const RF_SELF_ASSIGNED = 0x20000;
+    const RF_CONTENT_EDITED = 0x40000;
+    const RF_AUSEEN = 0x80000;
+    const RF_AUSEEN_PREVIOUS = 0x100000;
+    const RF_AUSEEN_LIVE = 0x200000;
+
+    /** @deprecated */
+    const RS_ACCEPTED = self::RS_ACKNOWLEDGED;
+    /** @deprecated */
+    const RF_ACCEPTED = self::RF_ACKNOWLEDGED;
+    /** @deprecated */
+    const RS_ADOPTED = self::RS_APPROVED;
+    /** @deprecated */
+    const RF_ADOPTED = self::RF_APPROVED;
 
     const RATING_GOODMASK = 1;
     const RATING_BADMASK = 126;
@@ -162,6 +191,9 @@ class ReviewInfo implements JsonSerializable {
     // see also assign.php, script.js
     static private $type_revmap = ["none", "external", "pc", "secondary", "primary", "meta"];
 
+    /** @var list<string> */
+    static public $status_names = ["empty", "acknowledged", "draft", "delivered", "approved", "complete"];
+
     /** @param string $str
      * @param bool $required
      * @return null|int|false */
@@ -185,6 +217,13 @@ class ReviewInfo implements JsonSerializable {
         return self::$type_revmap[$type];
     }
 
+    /** @param int $rflags
+     * @return int */
+    static function rflags_type($rflags) {
+        // Returns $rtype so that ($rflags & RFM_TYPES) contains (1 << $rtype).
+        return ($rflags & 0x30 ? 4 : 0) + ($rflags & 0x0C ? 2 : 0) + ($rflags & 0x2A ? 1 : 0);
+    }
+
     /** @param int $type
      * @return string */
     static function unparse_assigner_action($type) {
@@ -197,7 +236,7 @@ class ReviewInfo implements JsonSerializable {
 
 
     /** @return ReviewInfo */
-    static function make_blank(PaperInfo $prow = null, Contact $user) {
+    static function make_blank(?PaperInfo $prow, Contact $user) {
         $rrow = new ReviewInfo;
         $rrow->conf = $user->conf;
         $rrow->prow = $prow;
@@ -216,12 +255,13 @@ class ReviewInfo implements JsonSerializable {
         $rrow->timeApprovalRequested = 0;
         $rrow->reviewNeedsSubmit = 0;
         $rrow->reviewViewScore = -3;
+        $rrow->rflags = self::RF_LIVE | (1 << $rrow->reviewType) | ($rrow->reviewBlind ? self::RF_BLIND : 0);
         $rrow->reviewStatus = self::RS_EMPTY;
         $rrow->fields = $rrow->conf->review_form()->order_array(null);
         return $rrow;
     }
 
-    private function _incorporate(PaperInfo $prow = null, Conf $conf = null) {
+    private function _incorporate(?PaperInfo $prow, ?Conf $conf) {
         $this->conf = $conf ?? $prow->conf;
         $this->prow = $prow;
         $this->paperId = (int) $this->paperId;
@@ -239,13 +279,12 @@ class ReviewInfo implements JsonSerializable {
         if ($this->reviewSubmitted !== null) {
             $this->reviewSubmitted = (int) $this->reviewSubmitted;
         }
-        if ($this->reviewAuthorSeen !== null) {
-            $this->reviewAuthorSeen = (int) $this->reviewAuthorSeen;
-        }
+        $this->reviewAuthorSeen = (int) $this->reviewAuthorSeen;
         $this->timeDisplayed = (int) $this->timeDisplayed;
         $this->timeApprovalRequested = (int) $this->timeApprovalRequested;
         $this->reviewNeedsSubmit = (int) $this->reviewNeedsSubmit;
         $this->reviewViewScore = (int) $this->reviewViewScore;
+        $this->rflags = (int) $this->rflags;
         $this->reviewStatus = $this->compute_review_status();
 
         if ($this->timeRequested !== null) {
@@ -294,7 +333,7 @@ class ReviewInfo implements JsonSerializable {
 
     /** @param PaperInfo|PaperInfoSet|null $prowx
      * @return ?ReviewInfo */
-    static function fetch($result, $prowx = null, Conf $conf = null) {
+    static function fetch($result, $prowx = null, ?Conf $conf = null) {
         $rrow = $result ? $result->fetch_object("ReviewInfo") : null;
         '@phan-var ?ReviewInfo $rrow';
         if ($rrow) {
@@ -308,12 +347,12 @@ class ReviewInfo implements JsonSerializable {
      * @param ?list<ReviewField> $scores
      * @return string */
     static function review_signature_sql(Conf $conf, $scores = null) {
-        $t = "r.reviewId, ' ', r.contactId, ' ', r.reviewToken, ' ', r.reviewType, ' ', r.reviewRound, ' ', r.requestedBy, ' ', r.reviewBlind, ' ', r.reviewModified, ' ', coalesce(r.reviewSubmitted,0), ' ', coalesce(r.reviewAuthorSeen,0), ' ', r.reviewOrdinal, ' ', r.timeDisplayed, ' ', r.timeApprovalRequested, ' ', r.reviewNeedsSubmit, ' ', r.reviewViewScore";
+        $t = "r.reviewId, ' ', r.contactId, ' ', r.reviewToken, ' ', r.reviewType, ' ', r.reviewRound, ' ', r.requestedBy, ' ', r.reviewBlind, ' ', r.reviewModified, ' ', coalesce(r.reviewSubmitted,0), ' ', coalesce(r.reviewAuthorSeen,0), ' ', r.reviewOrdinal, ' ', r.timeDisplayed, ' ', r.timeApprovalRequested, ' ', r.reviewNeedsSubmit, ' ', r.reviewViewScore, ' ', r.rflags";
         foreach ($scores ?? [] as $f) {
             if ($f->order && $f->main_storage)
                 $t .= ", ' {$f->order}=', {$f->main_storage}";
         }
-        return "group_concat($t order by r.reviewId)";
+        return "group_concat({$t} order by r.reviewId)";
     }
 
     /** @param string $signature
@@ -339,10 +378,11 @@ class ReviewInfo implements JsonSerializable {
         $rrow->timeApprovalRequested = (int) $vals[12];
         $rrow->reviewNeedsSubmit = (int) $vals[13];
         $rrow->reviewViewScore = (int) $vals[14];
+        $rrow->rflags = (int) $vals[15];
         $rrow->reviewStatus = $rrow->compute_review_status();
-        if (isset($vals[15])) {
+        if (isset($vals[16])) {
             $rrow->fields = $prow->conf->review_form()->order_array(null);
-            for ($i = 15; isset($vals[$i]); ++$i) {
+            for ($i = 16; isset($vals[$i]); ++$i) {
                 $eq = strpos($vals[$i], "=");
                 $order = intval(substr($vals[$i], 0, $eq));
                 $fv = intval(substr($vals[$i], $eq + 1));
@@ -360,6 +400,12 @@ class ReviewInfo implements JsonSerializable {
     }
 
 
+    /** @return bool */
+    function is_ghost() {
+        $m = $this->conf->rev_open ? self::RF_LIVE : self::RFM_NONEMPTY;
+        return ($this->rflags & $m) === 0;
+    }
+
     /** @return int */
     function compute_review_status() {
         if ($this->reviewSubmitted) {
@@ -369,14 +415,32 @@ class ReviewInfo implements JsonSerializable {
             if ($this->timeApprovalRequested > 0) {
                 return self::RS_DELIVERED;
             } else {
-                return self::RS_ADOPTED;
+                return self::RS_APPROVED;
             }
         } else if ($this->reviewModified === 0) {
             return self::RS_EMPTY;
         } else if ($this->reviewModified === 1) {
-            return self::RS_ACCEPTED;
+            return self::RS_ACKNOWLEDGED;
         } else {
             return self::RS_DRAFTED;
+        }
+    }
+
+    /** @param int $rflags
+     * @return int */
+    static function rflags_review_status($rflags) {
+        if (($rflags & self::RF_SUBMITTED) !== 0) {
+            return self::RS_COMPLETED;
+        } else if (($rflags & self::RF_APPROVED) !== 0) {
+            return self::RS_APPROVED;
+        } else if (($rflags & self::RF_DELIVERED) !== 0) {
+            return self::RS_DELIVERED;
+        } else if (($rflags & self::RF_DRAFTED) !== 0) {
+            return self::RS_DRAFTED;
+        } else if (($rflags & self::RF_ACKNOWLEDGED) !== 0) {
+            return self::RS_ACKNOWLEDGED;
+        } else {
+            return self::RS_EMPTY;
         }
     }
 
@@ -398,27 +462,70 @@ class ReviewInfo implements JsonSerializable {
         return $this->conf->setting($this->deadline_name($hard));
     }
 
-    /** @return ?int */
+    /** @return int */
     function mtime(Contact $viewer) {
-        if (!$this->prow || !$viewer->can_view_review_time($this->prow, $this)) {
-            return null;
-        } else if ($viewer->view_score_bound($this->prow, $this) >= VIEWSCORE_AUTHORDEC - 1) {
-            if (isset($this->reviewAuthorModified)) {
-                return (int) $this->reviewAuthorModified;
-            } else {
-                $ran = (int) ($this->reviewAuthorNotified ?? 0);
-                $rm = $this->reviewModified;
-                if (!$ran || $rm - $ran <= ReviewForm::NOTIFICATION_DELAY) {
-                    return $rm;
-                } else {
-                    return $ran;
-                }
-            }
-        } else if ($this->reviewModified > 1) {
-            return $this->reviewModified;
-        } else {
-            return (int) $this->timeRequested;
+        return ($this->mtime_info($viewer))[0];
+    }
+
+    /** @return array{int,bool} */
+    function mtime_info(Contact $viewer) {
+        // Return the modification time of this review according to $viewer,
+        // plus a bool indicating whether the time was obscured.
+
+        // For the reviewer or an administrator, this is reviewModified.
+
+        // LOGICAL METHOD
+        // - Enumerate all visible versions of the review
+        // - For each version, the modification time is the earliest contiguous
+        //   time with the same review data and status
+
+        // EASIER METHOD FOR AUTHORS
+        // - If AUSEEN_LIVE, then precise time is visible
+        // - Otherwise, if AUSEEN_PREVIOUS, then obscure time is visible
+        // - Otherwise, no time is visible
+
+        // EASIER METHOD FOR REVIEWERS
+        // - If AUSEEN_LIVE, then precise time is visible
+        // - Otherwise, if viewer is reviewer and has an older review, then
+        //   precise time is visible
+        // - Otherwise, obscure time is visible
+
+        // We currently use the easier method even though it can expose
+        // information about otherwise-invisible modifications to reviews.
+
+        assert($this->prow);
+
+        if ($this->reviewModified <= 1
+            || $this->reviewModified <= $this->timeRequested) {
+            return [0, true];
         }
+
+        if (($this->rflags & self::RF_AUSEEN_LIVE) !== 0
+            || $viewer->can_administer($this->prow)
+            || $viewer->is_my_review($this)) {
+            return [$this->reviewModified, false];
+        }
+
+        $view_score_bound = $viewer->view_score_bound($this->prow, $this);
+        if ($this->view_score() <= $view_score_bound) {
+            return [0, true];
+        }
+
+        if ($view_score_bound >= VIEWSCORE_AUTHORDEC - 1) {
+            if (($this->rflags & self::RF_AUSEEN_PREVIOUS) === 0) {
+                return [0, true];
+            }
+        } else {
+            if ($viewer->can_view_review_identity($this->prow, $this)
+                || (($viewer_rrow = $this->prow->review_by_user($viewer))
+                    && $viewer_rrow->timeDisplayed > 0
+                    && $this->timeDisplayed > 0
+                    && $viewer_rrow->timeDisplayed < $this->timeDisplayed)) {
+                return [$this->reviewModified, false];
+            }
+        }
+
+        return [$this->conf->obscure_time($this->reviewModified), true];
     }
 
     /** @return bool */
@@ -434,26 +541,45 @@ class ReviewInfo implements JsonSerializable {
         return $this->reviewRound ? $this->conf->round_name($this->reviewRound) : "";
     }
 
-    /** @return string */
-    function icon_h() {
+    /** @param int $rflags
+     * @return string */
+    static function rflags_icon_class_suffix($rflags) {
+        if (($rflags & self::RF_SUBMITTED) !== 0) {
+            return "";
+        } else if (($rflags & self::RF_LIVE) === 0) {
+            return " rtghost";
+        } else if (($rflags & self::RF_APPROVED) !== 0) {
+            return " rtsubrev";
+        } else {
+            return " rtinc";
+        }
+    }
+
+    /** @param ?string $classes
+     * @return string */
+    function icon_classes($classes = null) {
+        $k = "rto rt{$this->reviewType}";
+        if ($classes !== null) {
+            $k = Ht::add_tokens($k, $classes);
+        }
+        return $k . self::rflags_icon_class_suffix($this->rflags);
+    }
+
+    /** @param ?string $classes
+     * @return string */
+    function icon_h($classes = null) {
+        $k = $this->icon_classes($classes);
         $title = $this->status_title(true);
         if ($title === "Review") {
             $title = ReviewForm::$revtype_names_full[$this->reviewType];
         }
-        $t = '<span class="rto rt' . $this->reviewType;
-        if ($this->reviewStatus < ReviewInfo::RS_COMPLETED) {
-            if ($this->timeApprovalRequested < 0) {
-                $t .= " rtsubrev";
-            } else {
-                $t .= " rtinc";
-            }
-            if ($title !== "Subreview" || $this->timeApprovalRequested >= 0) {
-                $title .= " (" . $this->status_description() . ")";
-            }
+        if ($this->reviewStatus < ReviewInfo::RS_COMPLETED
+            && !$this->is_ghost()
+            && ($title !== "Subreview" || $this->timeApprovalRequested >= 0)) {
+            $title .= " (" . $this->status_description() . ")";
         }
-        return $t . '" title="' . $title . '"><span class="rti">'
-            . ReviewForm::$revtype_icon_text[$this->reviewType]
-            . '</span></span>';
+        $text = ReviewForm::$revtype_icon_text[$this->reviewType];
+        return "<span class=\"{$k}\" title=\"{$title}\"><span class=\"rti\">{$text}</span></span>";
     }
 
     /** @param Conf $conf
@@ -475,11 +601,13 @@ class ReviewInfo implements JsonSerializable {
 
     /** @return string */
     function status_title($ucfirst = false) {
-        if ($this->reviewStatus <= ReviewInfo::RS_ACCEPTED
+        if ($this->reviewStatus <= ReviewInfo::RS_ACKNOWLEDGED
             && $this->reviewType < REVIEW_PC) {
             return $ucfirst ? "Request" : "request";
         } else if ($this->subject_to_approval()) {
             return $ucfirst ? "Subreview" : "subreview";
+        } else if ($this->is_ghost()) {
+            return $ucfirst ? "Hidden assignment" : "hidden assignment";
         } else {
             return $ucfirst ? "Review" : "review";
         }
@@ -489,7 +617,7 @@ class ReviewInfo implements JsonSerializable {
     function status_description() {
         if ($this->reviewStatus >= ReviewInfo::RS_COMPLETED) {
             return "complete";
-        } else if ($this->reviewStatus === ReviewInfo::RS_ADOPTED) {
+        } else if ($this->reviewStatus === ReviewInfo::RS_APPROVED) {
             return "approved";
         } else if ($this->reviewStatus === ReviewInfo::RS_DELIVERED) {
             return "pending approval";
@@ -499,10 +627,12 @@ class ReviewInfo implements JsonSerializable {
                    && $this->reviewNeedsSubmit <= 0
                    && $this->conf->ext_subreviews < 3) {
             return "delegated";
-        } else if ($this->reviewStatus === ReviewInfo::RS_ACCEPTED) {
+        } else if ($this->reviewStatus === ReviewInfo::RS_ACKNOWLEDGED) {
             return "accepted";
         } else if ($this->reviewType < REVIEW_PC) {
             return "outstanding";
+        } else if ($this->is_ghost()) {
+            return "tentative";
         } else {
             return "not started";
         }
@@ -678,12 +808,9 @@ class ReviewInfo implements JsonSerializable {
         return $this->$prop;
     }
 
-    /** @param ?string $prop
-     * @return bool */
-    function prop_changed($prop = null) {
-        return $this->_diff
-            && $this->_diff->view_score > VIEWSCORE_EMPTY
-            && (!$prop || array_key_exists($prop, $this->_diff->_old_prop));
+    /** @return bool */
+    function prop_changed() {
+        return $this->_diff && !$this->_diff->is_empty();
     }
 
     const SAVE_PROP_STAGED = 2;
@@ -705,9 +832,10 @@ class ReviewInfo implements JsonSerializable {
         assert(!isset($this->_diff->_old_prop["reviewTime"]));
         $this->_seal_fstorage();
         if ($this->reviewId <= 0) {
-            foreach (["paperId", "contactId", "reviewType", "requestedBy", "reviewRound"] as $k) {
-                assert(!array_key_exists($k, $this->_diff->_old_prop));
-                $this->_diff->_old_prop[$k] = $this->$k;
+            foreach (["paperId", "contactId", "reviewType", "requestedBy", "reviewRound", "reviewBlind", "rflags"] as $k) {
+                if (!array_key_exists($k, $this->_diff->_old_prop)) {
+                    $this->_diff->_old_prop[$k] = $this->$k;
+                }
             }
             $this->set_prop("reviewTime", mt_rand(2000, 1000000));
         } else {
@@ -744,6 +872,10 @@ class ReviewInfo implements JsonSerializable {
             $r = self::SAVE_PROP_OK;
         }
         $result && $result->close();
+        if ($r >= 0) {
+            $this->_diff->save_history($stager);
+            $this->_diff = null;
+        }
         return $r;
     }
 
@@ -754,17 +886,20 @@ class ReviewInfo implements JsonSerializable {
             }
             $this->_sfields = $this->_tfields = null;
             $this->_assign_fields();
+            $this->_diff = null;
         }
     }
 
 
     /** @return array<string,ReviewField> */
-    function viewable_fields(Contact $user) {
+    function viewable_fields(Contact $user, $include_nonexistent = false) {
         $bound = $user->view_score_bound($this->prow, $this);
         $fs = [];
         foreach ($this->conf->all_review_fields() as $fid => $f) {
             if ($f->view_score > $bound
-                && $f->test_exists($this))
+                && ($f->test_exists($this)
+                    || ($include_nonexistent
+                        && $this->fields[$f->order] !== null)))
                 $fs[$fid] = $f;
         }
         return $fs;
@@ -774,8 +909,9 @@ class ReviewInfo implements JsonSerializable {
     /** @return Contact */
     function reviewer() {
         if ($this->_reviewer === null) {
+            $this->prow && $this->prow->ensure_reviewer_names();
             $this->_reviewer = $this->conf->user_by_id($this->contactId, USER_SLICE)
-                ?? Contact::make_placeholder($this->conf, $this->contactId);
+                ?? Contact::make_deleted($this->conf, $this->contactId);
         }
         return $this->_reviewer;
     }
@@ -821,12 +957,12 @@ class ReviewInfo implements JsonSerializable {
 
     function ensure_ratings() {
         if ($this->ratingSignature === null) {
-            if ($this->conf->setting("rev_ratings") === REV_RATINGS_NONE) {
+            if ($this->conf->review_ratings() < 0) {
                 $this->ratingSignature = "";
             } else if ($this->prow) {
                 $this->prow->ensure_review_ratings($this);
             } else {
-                $result = $this->conf->qe("select " . $this->conf->query_ratings() . " from PaperReview where paperId=? and reviewId=?", $this->paperId, $this->reviewId);
+                $result = $this->conf->qe("select " . $this->conf->rating_signature_query() . " from PaperReview where paperId=? and reviewId=?", $this->paperId, $this->reviewId);
                 $row = $result->fetch_row();
                 Dbl::free($result);
                 $this->ratingSignature = $row ? $row[0] : "";
@@ -988,6 +1124,7 @@ class ReviewInfo implements JsonSerializable {
         $rrow->reviewNotified = $rhrow->reviewNotified;
         $rrow->reviewAuthorNotified = $rhrow->reviewAuthorNotified;
         $rrow->reviewEditVersion = $rhrow->reviewEditVersion;
+        $rrow->rflags = $rhrow->rflags;
 
         if ($rhrow->revdelta !== null) {
             $patch = json_decode($rhrow->revdelta, true);
@@ -1004,11 +1141,17 @@ class ReviewInfo implements JsonSerializable {
     /** @return list<ReviewHistoryInfo> */
     function load_history() {
         $this->_history = [];
-        $result = $this->conf->qe("select * from PaperReviewHistory where paperId=? and reviewId=? order by reviewTime asc", $this->paperId, $this->reviewId);
+        $result = $this->conf->qe("select * from PaperReviewHistory where paperId=? and reviewId=? and reviewTime<=? order by reviewTime asc", $this->paperId, $this->reviewId, $this->reviewTime);
         while (($rhrow = ReviewHistoryInfo::fetch($result))) {
             $this->_history[] = $rhrow;
         }
         Dbl::free($result);
+        return $this->_history;
+    }
+
+    /** @return list<ReviewInfo|ReviewHistoryInfo> */
+    function history() {
+        $this->_history = $this->_history ?? $this->load_history();
         return $this->_history;
     }
 

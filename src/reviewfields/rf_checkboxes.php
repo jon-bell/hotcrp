@@ -1,6 +1,6 @@
 <?php
 // reviewfields/rf_checkboxes.php -- HotCRP checkboxes review fields
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
     const MASK2SCORE = "012 3   4       5               6";
@@ -68,16 +68,16 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
     }
 
     /** @param int|float $fval
-     * @param ?string $real_format
+     * @param ?string $format
      * @return string */
-    function unparse_computed($fval, $real_format = null) {
+    function unparse_computed($fval, $format = null) {
         // XXX
         if ($fval === null) {
             return "";
         }
         $numeric = ($this->flags & self::FLAG_NUMERIC) !== 0;
-        if ($real_format !== null && $numeric) {
-            return sprintf($real_format, $fval);
+        if ($format !== null && $numeric) {
+            return sprintf($format, $fval);
         }
         if ($fval <= 0.8) {
             return "–";
@@ -361,8 +361,7 @@ class Checkboxes_ReviewFieldSearch extends ReviewFieldSearch {
         }
     }
 
-    function test_review($user, $prow, $rrow) {
-        $fv = $rrow->fval($this->rf);
+    function test_value($rrow, $fv) {
         if ($fv
             ? ($fv & $this->fvm) === 0 || ($fv & $this->fvnm) !== 0
             : !$this->allow0) {

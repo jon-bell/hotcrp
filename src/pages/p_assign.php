@@ -1,6 +1,6 @@
 <?php
 // pages/p_assign.php -- HotCRP per-paper assignment/conflict management page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Assign_Page {
     /** @var Conf */
@@ -41,7 +41,6 @@ class Assign_Page {
                 throw $whynot;
             }
         } catch (Redirection $redir) {
-            assert(PaperRequest::simple_qreq($this->qreq));
             throw $redir;
         } catch (PermissionProblem $perm) {
             $this->error_exit(MessageItem::error("<5>" . $perm->unparse_html()));
@@ -109,7 +108,7 @@ class Assign_Page {
         }
 
         $aset = new AssignmentSet($this->user);
-        $aset->override_conflicts();
+        $aset->set_override_conflicts(true);
         $aset->enable_papers($this->prow);
         $aset->parse(join("", $t));
         $ok = $aset->execute();
@@ -233,7 +232,7 @@ class Assign_Page {
             echo " by ", $this->user->reviewer_html_for($rrow->requestedBy);
         }
         echo '</li>';
-        if ($rrow->reviewStatus === ReviewInfo::RS_ACCEPTED) {
+        if ($rrow->reviewStatus === ReviewInfo::RS_ACKNOWLEDGED) {
             echo '<li>accepted';
             if ($time) {
                 echo ' ', $this->conf->unparse_time_relative($time);
@@ -347,7 +346,7 @@ class Assign_Page {
 
         $namex = "<span class=\"fn\">{$name}</span><span class=\"fx\">{$fullname}</span>{$actas}";
         if ($rrow->reviewType !== REVIEW_REFUSAL) {
-            $namex .= ' ' . review_type_icon($rrowid->isPC ? REVIEW_PC : REVIEW_EXTERNAL, true);
+            $namex .= ' ' . review_type_icon($rrowid->isPC ? REVIEW_PC : REVIEW_EXTERNAL, "rtinc");
         }
         if ($this->user->can_view_review_meta($this->prow, $rrow)) {
             $namex .= ReviewInfo::make_round_h($this->conf, $rrow->reviewRound);
@@ -388,7 +387,7 @@ class Assign_Page {
                 $buttons[] = Ht::submit("approvereview", "Approve proposal", ["class" => "btn-sm btn-success"]);
                 $buttons[] = Ht::submit("denyreview", "Deny proposal", ["class" => "btn-sm ui js-deny-review-request"]); // XXX reason
             }
-            if ($rrow->reviewType >= 0 && $rrow->reviewStatus > ReviewInfo::RS_ACCEPTED) {
+            if ($rrow->reviewType >= 0 && $rrow->reviewStatus > ReviewInfo::RS_ACKNOWLEDGED) {
                 $buttons[] = Ht::submit("retractreview", "Retract review", ["class" => "btn-sm"]);
             } else if ($rrow->reviewType >= 0) {
                 $buttons[] = Ht::submit("retractreview", "Retract review request", ["class" => "btn-sm"]);
@@ -449,11 +448,18 @@ class Assign_Page {
             '<button type="button" class="q ui js-assignment-fold">', expander(null, 0),
             $this->user->reviewer_html_for($pc), '</button>';
         if ($crevtype != 0) {
-            echo review_type_icon($crevtype, $rrow && $rrow->reviewStatus < ReviewInfo::RS_ADOPTED, "ml-2"),
-                $rrow ? $rrow->round_h() : "";
+            if ($rrow) {
+                echo review_type_icon($crevtype, $rrow->icon_classes("ml-1")), $rrow->round_h();
+            } else {
+                echo review_type_icon($crevtype, "ml-1");
+            }
         }
         if ($revtype >= 0) {
-            echo unparse_preference_span($this->prow->preference($pc, true));
+            $pf = $this->prow->preference($pc);
+            $tv = $pf->preference ? null : $this->prow->topic_interest_score($pc);
+            if ($pf->exists() || $tv) {
+                echo " ", $pf->unparse_span($tv);
+            }
         }
         echo '</div>'; // .pctbname
         if ($potconf) {
@@ -541,8 +547,8 @@ class Assign_Page {
                 '<div class="revcard-body">',
                 Ht::form($this->conf->hoturl("=assign", "p=$prow->paperId"), [
                     "id" => "f-pc-assignments",
-                    "class" => "need-unload-protection",
-                    "data-alert-toggle" => "paper-alert"
+                    "class" => "need-unload-protection need-diff-check",
+                    "data-differs-toggle" => "paper-alert"
                 ]);
             Ht::stash_script('$(hotcrp.load_editable_pc_assignments)');
 
@@ -657,9 +663,6 @@ class Assign_Page {
             $user->escape();
         }
         $user->add_overrides(Contact::OVERRIDE_CONFLICT);
-        // ensure site contact exists before locking tables
-        $user->conf->site_contact();
-
         $ap = new Assign_Page($user, $qreq);
         $ap->assign_load();
         $ap->handle_request();

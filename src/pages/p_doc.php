@@ -1,6 +1,6 @@
 <?php
 // pages/doc.php -- HotCRP document download page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Doc_Page {
     /** @param string $status
@@ -11,7 +11,7 @@ class Doc_Page {
 
         if (str_starts_with($status, "403") && $qreq->user()->is_empty()) {
             $qreq->user()->escape();
-            exit;
+            exit();
         } else if (str_starts_with($status, "5")) {
             $navpath = $qreq->path();
             error_log($qreq->conf()->dbname . ": bad doc $status "
@@ -21,14 +21,14 @@ class Doc_Page {
                 . (empty($_SERVER["HTTP_REFERER"]) ? "" : " R[" . $_SERVER["HTTP_REFERER"] . "]"));
         }
 
-        header("HTTP/1.1 $status");
+        header("HTTP/1.1 {$status}");
         if (isset($qreq->fn)) {
             json_exit(["ok" => false, "message_list" => $ml]);
         } else {
             $qreq->print_header("Download", null);
             $qreq->conf()->feedback_msg($ml);
             $qreq->print_footer();
-            exit;
+            exit();
         }
     }
 
@@ -120,7 +120,7 @@ class Doc_Page {
 
         // version
         if (isset($qreq->version) && $dr->dtype >= DTYPE_FINAL) {
-            $version_hash = Filer::hash_as_binary(trim($qreq->version));
+            $version_hash = HashAnalysis::hash_as_binary(trim($qreq->version));
             if (!$version_hash) {
                 self::error("404 Not Found", MessageItem::error("<0>Version not found"), $qreq);
             }
@@ -149,7 +149,7 @@ class Doc_Page {
         // check for contents request
         if ($qreq->fn === "listing" || $qreq->fn === "consolidatedlisting") {
             if (!$doc->is_archive()) {
-                json_exit(MessageItem::make_error_json("<0>That file is not an archive"));
+                json_exit(JsonResult::make_error(400, "<0>That file is not an archive"));
             } else if (($listing = $doc->archive_listing(65536)) === null) {
                 $ml = $doc->message_list();
                 if (empty($ml)) {
@@ -167,13 +167,11 @@ class Doc_Page {
 
         // serve document
         $qreq->qsession()->commit();      // to allow concurrent clicks
-        $opts = ["attachment" => cvtint($qreq->save) > 0];
-        if ($doc->has_hash() && ($x = $qreq->hash) && $doc->check_text_hash($x)) {
-            $opts["cacheable"] = true;
-        }
-        if ($doc->download(DocumentRequest::add_connection_options($opts))) {
-            DocumentInfo::log_download_activity([$doc], $user);
-        } else {
+        $dopt = Downloader::make_server_request();
+        $dopt->attachment = (stoi($qreq->save) ?? -1) > 0;
+        $dopt->cacheable = $doc->has_hash() && ($x = $qreq->hash) && $doc->check_text_hash($x);
+        $dopt->log_user = $user;
+        if (!$doc->download($dopt)) {
             self::error("500 Server Error", $doc->message_set(), $qreq);
         }
     }

@@ -1,9 +1,11 @@
 <?php
 // filefilter.php -- HotCRP helper class for filtering documents
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class FileFilter {
+    /** @var int */
     public $id;
+    /** @var string */
     public $name;
 
     /** @return array<string,FileFilter> */

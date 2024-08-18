@@ -1,10 +1,9 @@
 <?php
 // contactlist.php -- HotCRP helper class for producing lists of contacts
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class ContactList {
     const FIELD_SELECTOR = 1000;
-    const FIELD_SELECTOR_ON = 1001;
 
     const FIELD_NAME = 1;
     const FIELD_EMAIL = 2;
@@ -80,6 +79,10 @@ class ContactList {
     private $_limit_cids;
     /** @var array<int,array> */
     private $_sort_data;
+    /** @var ?SearchSelection */
+    private $_selection;
+    /** @var bool */
+    private $_select_all = false;
 
     function __construct(Contact $user, $sortable = true, $qreq = null) {
         $this->conf = $user->conf;
@@ -111,6 +114,13 @@ class ContactList {
                 $this->sortField = $fs[3];
             }
         }
+
+        if ($this->qreq->has_a("pap")) {
+            $this->_selection = SearchSelection::make($this->qreq);
+        }
+        if ($this->qreq->selectall) {
+            $this->_select_all = true;
+        }
     }
 
     /** @param int|string $fieldId
@@ -120,9 +130,6 @@ class ContactList {
         case self::FIELD_SELECTOR:
         case "sel":
             return ["sel", 1, 0, self::FIELD_SELECTOR, "sel"];
-        case self::FIELD_SELECTOR_ON:
-        case "selon":
-            return ["sel", 1, 0, self::FIELD_SELECTOR, "selon"];
         case self::FIELD_NAME:
         case "name":
             return ["name", 1, 1, self::FIELD_NAME, "name"];
@@ -196,62 +203,87 @@ class ContactList {
 
     /** @param int $fieldId */
     function selector($fieldId) {
-        if (!$this->user->isPC
-            && $fieldId !== self::FIELD_NAME
-            && $fieldId !== self::FIELD_AFFILIATION
-            && $fieldId !== self::FIELD_AFFILIATION_ROW) {
-            return false;
-        } else if (in_array($fieldId, [self::FIELD_NAME, self::FIELD_SELECTOR, self::FIELD_SELECTOR_ON, self::FIELD_EMAIL, self::FIELD_AFFILIATION, self::FIELD_LASTVISIT], true)) {
-            return true;
-        }
         switch ($fieldId) {
+        case self::FIELD_NAME:
+        case self::FIELD_AFFILIATION:
+            return true;
+        case self::FIELD_AFFILIATION_ROW:
+            $this->have_folds["aff"] = true;
+            return true;
+        case self::FIELD_SELECTOR:
+        case self::FIELD_EMAIL:
+            return $this->user->isPC;
+        case self::FIELD_LASTVISIT:
+            return $this->user->privChair;
         case self::FIELD_HIGHTOPICS:
         case self::FIELD_LOWTOPICS:
+            if (!$this->user->isPC) {
+                return false;
+            }
             $this->have_folds["topics"] = $this->qopt["topics"] = true;
-            break;
+            return true;
         case self::FIELD_REVIEWS:
         case self::FIELD_INCOMPLETE_REVIEWS:
+            if (!$this->user->isPC) {
+                return false;
+            }
             $this->qopt["reviews"] = true;
-            break;
+            return true;
         case self::FIELD_LEADS:
+            if (!$this->user->isPC) {
+                return false;
+            }
             $this->qopt["papers"] = $this->qopt["leads"] = true;
-            break;
+            return true;
         case self::FIELD_SHEPHERDS:
+            if (!$this->user->isPC) {
+                return false;
+            }
             $this->qopt["papers"] = $this->qopt["shepherds"] = true;
-            break;
+            return true;
         case self::FIELD_REVIEW_RATINGS:
-            if ($this->conf->setting("rev_ratings") == REV_RATINGS_NONE) {
+            if (!$this->user->isPC
+                || $this->conf->review_ratings() < 0) {
                 return false;
             }
             $this->qopt["revratings"] = $this->qopt["reviews"] = true;
-            break;
+            return true;
         case self::FIELD_PAPERS:
+            if (!$this->user->isPC) {
+                return false;
+            }
             $this->qopt["papers"] = $this->limit;
-            break;
+            return true;
         case self::FIELD_REVIEW_PAPERS:
+            if (!$this->user->isPC) {
+                return false;
+            }
             $this->qopt["repapers"] = $this->qopt["reviews"] = true;
-            break;
-        case self::FIELD_AFFILIATION_ROW:
-            $this->have_folds["aff"] = true;
-            break;
+            return true;
         case self::FIELD_TAGS:
+            if (!$this->user->can_view_user_tags()) {
+                return false;
+            }
             $this->have_folds["tags"] = true;
-            break;
+            return true;
         case self::FIELD_COLLABORATORS:
+            if (!$this->user->isPC) {
+                return false;
+            }
             $this->have_folds["collab"] = true;
-            break;
+            return true;
         default:
             $f = $this->_rfields[$fieldId - self::FIELD_SCORE];
-            if (!$this->user->can_view_some_review_field($f)) {
+            if (!$this->user->isPC
+                || !$this->user->can_view_some_review_field($f)) {
                 return false;
             }
             $this->qopt["reviews"] = true;
             if (!in_array($f, $this->_wfields)) {
                 $this->_wfields[] = $f;
             }
-            break;
+            return true;
         }
-        return true;
     }
 
     /** @param int $uid
@@ -488,11 +520,11 @@ class ContactList {
             $this->_reord_data[$cid][] = [$rrow->paperId, $rrow->reviewId, $rrow->reviewOrdinal];
         }
         if ($review_limit
-            && ($rrow->reviewStatus >= ReviewInfo::RS_ADOPTED || $prow->timeSubmitted > 0 || $review_limit === "all")) {
+            && ($rrow->reviewStatus >= ReviewInfo::RS_APPROVED || $prow->timeSubmitted > 0 || $review_limit === "all")) {
             if ($this->limit === "re"
                 || ($this->limit === "req" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->requestedBy == $this->user->contactId)
                 || ($this->limit === "ext" && $rrow->reviewType === REVIEW_EXTERNAL)
-                || ($this->limit === "extsub" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->reviewStatus >= ReviewInfo::RS_ADOPTED)
+                || ($this->limit === "extsub" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->reviewStatus >= ReviewInfo::RS_APPROVED)
                 || ($this->limit === "extrev-not-accepted" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->reviewStatus === ReviewInfo::RS_EMPTY)) {
                 $this->_limit_cids[$cid] = true;
             }
@@ -500,11 +532,11 @@ class ContactList {
         if (!isset($this->_rect_data[$cid])) {
             $this->_rect_data[$cid] = [0, 0];
         }
-        if (($this->limit === "extsub" && $rrow->reviewStatus < ReviewInfo::RS_ADOPTED)
+        if (($this->limit === "extsub" && $rrow->reviewStatus < ReviewInfo::RS_APPROVED)
             || ($this->limit === "extrev-not-accepted" && $rrow->reviewStatus !== ReviewInfo::RS_EMPTY)) {
             return;
         }
-        if ($rrow->reviewStatus >= ReviewInfo::RS_ADOPTED) {
+        if ($rrow->reviewStatus >= ReviewInfo::RS_APPROVED) {
             $this->_rect_data[$cid][0] += 1;
             $this->_rect_data[$cid][1] += 1;
             if ($this->user->can_view_review($prow, $rrow)) {
@@ -641,7 +673,7 @@ class ContactList {
                     $pids[] = $prow->paperId;
                 }
             }
-            $result = $this->conf->qe("select paperId, reviewId, " . $this->conf->query_ratings() . " ratingSignature from PaperReview where paperId?a and reviewType>0 group by paperId, reviewId", $pids);
+            $result = $this->conf->qe("select paperId, reviewId, " . $this->conf->rating_signature_query() . " ratingSignature from PaperReview where paperId?a and reviewType>0 group by paperId, reviewId", $pids);
             while (($row = $result->fetch_row())) {
                 $ratings[$row[0]][$row[1]] = $row[2];
             }
@@ -708,7 +740,7 @@ class ContactList {
                 $t = "<a href=\"" . $this->conf->hoturl("profile", "u=" . urlencode($row->email)) . "\"" . ($row->is_disabled() ? ' class="qh"' : "") . ">$t</a>";
             }
             if (($viewable = $row->viewable_tags($this->user))
-                && $this->conf->tags()->has_decoration) {
+                && $this->conf->tags()->has(TagInfo::TFM_DECORATION)) {
                 $tagger = new Tagger($this->user);
                 $t .= $tagger->unparse_decoration_html($viewable, Tagger::DECOR_USER);
             }
@@ -717,7 +749,7 @@ class ContactList {
                 $roles = 0;
             }
             if ($roles !== 0 && ($rolet = Contact::role_html_for($roles))) {
-                $t .= " $rolet";
+                $t .= " {$rolet}";
             }
             if ($this->user->privChair && $row->email != $this->user->email) {
                 $t .= " <a href=\"" . $this->conf->hoturl("index", "actas=" . urlencode($row->email)) . "\">"
@@ -749,11 +781,11 @@ class ContactList {
                 return $this->conf->unparse_time_obscure($row->activity_at);
             }
         case self::FIELD_SELECTOR:
-        case self::FIELD_SELECTOR_ON:
             $this->any->sel = true;
             $c = "";
-            if ($fieldId == self::FIELD_SELECTOR_ON) {
-                $c = ' checked="checked"';
+            if ($this->_select_all
+                || ($this->_selection && $this->_selection->is_selected($row->contactId))) {
+                $c = ' checked';
             }
             return '<input type="checkbox" class="uic js-range-click js-selector" name="pap[]" value="' . $row->contactId . '" tabindex="1"' . $c . ' />';
         case self::FIELD_HIGHTOPICS:
@@ -861,7 +893,7 @@ class ContactList {
                 $x = [];
                 foreach (Tagger::split($tags) as $t) {
                     if ($t !== "pc#0")
-                        $x[] = '<a class="q nw" href="' . $this->conf->hoturl("users", "t=%23" . Tagger::base($t)) . '">' . $this->tagger->unparse_hashed($t) . '</a>';
+                        $x[] = '<a class="q nw" href="' . $this->conf->hoturl("users", "t=%23" . Tagger::tv_tag($t)) . '">' . $this->tagger->unparse_hashed($t) . '</a>';
                 }
                 return join(" ", $x);
             } else {
@@ -967,7 +999,7 @@ class ContactList {
                 . Ht::submit("fn", "Go", ["value" => "tag", "class" => "uic js-submit-list ml-2"])];
 
             $mods = ["disableaccount" => "Disable", "enableaccount" => "Enable"];
-            if ($this->user->can_change_password(null)) {
+            if ($this->user->can_edit_any_password()) {
                 $mods["resetpassword"] = "Reset password";
             }
             $mods["sendaccount"] = "Send account information";
@@ -1003,7 +1035,7 @@ class ContactList {
         } else if ($this->_limit_cids !== null) {
             $mainwhere[] = "contactId" . sql_in_int_list(array_keys($this->_limit_cids));
         }
-        $mainwhere[] = "disabled<" . Contact::DISABLEMENT_PLACEHOLDER;
+        $mainwhere[] = "(cflags&" . Contact::CF_PLACEHOLDER . ")=0";
 
         // make query
         $result = $this->conf->qe_raw("select * from ContactInfo" . (empty($mainwhere) ? "" : " where " . join(" and ", $mainwhere)));
@@ -1122,7 +1154,7 @@ class ContactList {
                 }
             }
             if ($row->is_disabled() && $this->user->isPC) {
-                $trclass .= " graytext";
+                $trclass .= " dim";
             }
             $this->count++;
             $ids[] = (int) $row->contactId;

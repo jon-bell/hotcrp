@@ -1711,10 +1711,9 @@ Comments for authors
 --------------------
 Nonradical
 
-******** test06-external2-request17
+******** t_review-external2-request17
 To: Jo March <external2@_.com>
 Subject: [Testconf I] Review request for submission #17
-X-Landmark: test/test06.php:747
 
 Dear Jo March,
 
@@ -1743,11 +1742,24 @@ Contact Eddie Kohler <ekohler@hotcrp.lcdf.org> with any questions or
 concerns.
 
 - Testconf I Submissions
-******** test06-external2-approval17
+******** t_review-external2-accept17
+To: Lixia Zhang <lixia@cs.ucla.edu>
+Subject: [Testconf I] Accepted review request for submission #17
+
+Dear Lixia Zhang,
+
+Jo March <external2@_.com> has confirmed their intention to complete the
+review you requested of Test Conference I (Testconf I) submission #17.
+
+* Title: Network Text Editor (NTE): A Scalable Shared Text Editor for
+  the MBone
+* Site: http://hotcrp.lcdf.org/test/paper/17
+
+- Testconf I Submissions
+******** t_review-external2-approval17
 To: Lixia Zhang <lixia@cs.ucla.edu>
 Subject: [Testconf I] Review approval requested for submission #17 "Network
  Text Editor (NTE): A Scalable..."
-X-Landmark: test/test06.php:755
 
 Greetings,
 
@@ -1777,11 +1789,10 @@ Reviewer expertise
 ------------------
 3. Knowledgeable
 
-******** test06-external2-submit17
+******** t_review-external2-submit17
 To: External Reviewer <external@_.com>
 Subject: [Testconf I] Submitted review #17E "Network Text Editor (NTE): A
  Scalable..."
-X-Landmark: test/test06.php:759
 
 Greetings,
 
@@ -1811,11 +1822,10 @@ Reviewer expertise
 ------------------
 3. Knowledgeable
 
-******** test06-external2-submit17
+******** t_review-external2-submit17
 To: Jo March <external2@_.com>
 Subject: [Testconf I] Submitted review #17E "Network Text Editor (NTE): A
  Scalable..."
-X-Landmark: test/test06.php:759
 
 Greetings,
 
@@ -1847,11 +1857,10 @@ Reviewer expertise
 ------------------
 3. Knowledgeable
 
-******** test06-external2-submit17
+******** t_review-external2-submit17
 To: Mary Baker <mgbaker@cs.stanford.edu>, Peter Druschel <pdruschel@cs.rice.edu>
 Subject: [Testconf I] Submitted review #17E "Network Text Editor (NTE): A
  Scalable..."
-X-Landmark: test/test06.php:759
 
 Greetings,
 
@@ -1886,11 +1895,28 @@ Reviewer expertise
 ******** test06-external3-request17
 To: Christian Huitema <huitema@bellcore.com>, Jane Chair <chair@_.com>, Scott Shenker <shenker@parc.xerox.com>
 Subject: [Testconf I] Review proposal for submission #17
-X-Landmark: test/test06.php:885
+X-Landmark: test/t_reviews.php:1263
 
 Greetings,
 
 Lixia Zhang <lixia@cs.ucla.edu> would like Amy March <external3@_.com>
+to review Test Conference I (Testconf I) submission #17.
+
+Visit the assignment page to approve or deny the proposal.
+
+* Title: Network Text Editor (NTE): A Scalable Shared Text Editor for
+  the MBone
+* Site: http://hotcrp.lcdf.org/test/assign/17
+
+- Testconf I Submissions
+******** test06-external4-request17
+To: Christian Huitema <huitema@bellcore.com>, Jane Chair <chair@_.com>, Scott Shenker <shenker@parc.xerox.com>
+Subject: [Testconf I] Review proposal for submission #17
+X-Landmark: test/t_reviews.php:1280
+
+Greetings,
+
+Lixia Zhang <lixia@cs.ucla.edu> would like Beth March <external4@_.com>
 to review Test Conference I (Testconf I) submission #17.
 
 Visit the assignment page to approve or deny the proposal.
@@ -2065,6 +2091,96 @@ Your message here.
 * Title: Potential Benefits of Delta Encoding and Data Compression for
   HTTP
 * Site: http://hotcrp.lcdf.org/test/paper/16
+
+Contact Eddie Kohler <ekohler@hotcrp.lcdf.org> with any questions or
+concerns.
+
+- Testconf I Submissions
+******** t_comments-response-combination
+To: Marcel Waldvogel <waldvogel@tik.ee.ethz.ch>, George Varghese <varghese@ccrc.wustl.edu>
+Subject: [Testconf I] Response for #4 "Scalable High Speed IP Routing Lookups"
+
+The authors' response for Test Conference I (Testconf I) submission #4
+is available as shown below. The authors may still update their
+response; for the most up-to-date version, or to turn off notification
+emails, see the submission site.
+
+* Title: Scalable High Speed IP Routing Lookups
+* Site: http://hotcrp.lcdf.org/test/paper/4
+
+Contact Eddie Kohler <ekohler@hotcrp.lcdf.org> with any questions or
+concerns.
+
+- Testconf I Submissions
+
+Response by Author [George Varghese <varghese@ccrc.wustl.edu>] (1 word)
+---------------------------------------------------------------------------
+Non-Draft
+
+******** t_comments-response-combination
+To: Deborah Estrin <estrin@usc.edu>
+Subject: [Testconf I] Response for #4 "Scalable High Speed IP Routing Lookups"
+
+The authors' response for Test Conference I (Testconf I) submission #4
+is available as shown below. The authors may still update their
+response; for the most up-to-date version, or to turn off notification
+emails, see the submission site.
+
+* Title: Scalable High Speed IP Routing Lookups
+* Site: http://hotcrp.lcdf.org/test/paper/4
+
+Contact Eddie Kohler <ekohler@hotcrp.lcdf.org> with any questions or
+concerns.
+
+- Testconf I Submissions
+
+Response by Author (1 word)
+---------------------------------------------------------------------------
+Non-Draft
+
+******** t_comments-multiple-mentions
+To: Christian Huitema <huitema@bellcore.com>
+Subject: [Testconf I] Mentioned for #1 "Scalable Timers for Soft State
+ Protocols"
+
+Comment @2 by Jane Chair <chair@_.com> (Administrator)
+---------------------------------------------------------------------------
+@Christian Huitema @Christian Huitema @Christian Huitema Hello
+
+
+\***************************************************************************
+
+
+You were mentioned in this comment for Test Conference I (Testconf I)
+submission #1. For the most up-to-date comments, see the submission
+site.
+
+* Title: Scalable Timers for Soft State Protocols
+* Site: http://hotcrp.lcdf.org/test/paper/1
+
+Contact Eddie Kohler <ekohler@hotcrp.lcdf.org> with any questions or
+concerns.
+
+- Testconf I Submissions
+******** t_comments-multiple-mentions
+To: Mary Baker <mgbaker@cs.stanford.edu>
+Subject: [Testconf I] Comment for #1 "Scalable Timers for Soft State
+ Protocols"
+
+Comment @2 by Jane Chair <chair@_.com> (Administrator)
+---------------------------------------------------------------------------
+@Christian Huitema @Christian Huitema @Christian Huitema Hello
+
+
+\***************************************************************************
+
+
+You’re following comments for Test Conference I (Testconf I) submission
+#1. For the most up-to-date comments, or to unsubscribe from email
+notification, see the submission site.
+
+* Title: Scalable Timers for Soft State Protocols
+* Site: http://hotcrp.lcdf.org/test/paper/1
 
 Contact Eddie Kohler <ekohler@hotcrp.lcdf.org> with any questions or
 concerns.

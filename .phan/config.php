@@ -26,8 +26,8 @@ use Phan\Config;
  */
 return (function () {
 $config = [
-    "minimum_target_php_version" => "7.0",
-    "target_php_version" => "8.2",
+    "minimum_target_php_version" => "7.2",
+    "target_php_version" => "8.3",
 
     // If true, missing properties will be created when
     // they are first seen. If false, we'll report an
@@ -105,15 +105,6 @@ $config = [
         Config::projectPath("batch/downgradedb.php"),
         Config::projectPath("lib/collatorshim.php"),
         Config::projectPath("lib/polyfills.php")
-    ],
-
-    "globals_type_map" => [
-        "Conf" => '\Conf',
-        "Me" => '\Contact',
-        "Qreq" => '\Qrequest',
-        "prow" => '?PaperInfo',
-        "paperTable" => 'PaperTable',
-        "Admin" => '\Contact' // test
     ],
 
     "suppress_issue_types" => [

@@ -8,9 +8,9 @@
         "ecmaVersion": "latest"
     },
     "globals": {
-        "hotcrp": "writable",
         "Set": "readonly",
-        "WeakMap": "readonly"
+        "WeakMap": "readonly",
+        "Promise": "readonly"
     },
     "rules": {
         "no-empty": 0,

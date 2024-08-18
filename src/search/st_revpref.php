@@ -1,6 +1,6 @@
 <?php
 // search/st_revpref.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class RevprefSearchMatcher extends ContactCountMatcher {
     /** @var ?CountMatcher */
@@ -29,15 +29,16 @@ class RevprefSearchMatcher extends ContactCountMatcher {
             return join(" and ", $where);
         }
     }
-    function test_preference($pref) {
+    /** @param PaperReviewPreference $pf */
+    function test_preference($pf) {
         if ($this->is_any) {
-            return $pref[0] != 0 || $pref[1] !== null;
+            return $pf->exists();
         } else {
             return (!$this->preference_match
-                    || $this->preference_match->test($pref[0]))
+                    || $this->preference_match->test($pf->preference))
                 && (!$this->expertise_match
-                    || ($pref[1] !== null
-                        && $this->expertise_match->test($pref[1])));
+                    || ($pf->expertise !== null
+                        && $this->expertise_match->test($pf->expertise)));
         }
     }
 }
@@ -118,6 +119,10 @@ class Revpref_SearchTerm extends SearchTerm {
         return (new Revpref_SearchTerm($srch->user, $value))->negate_if(strcasecmp($word, "none") === 0);
     }
 
+    function paper_requirements(&$options) {
+        $options["allReviewerPreference"] = true;
+    }
+
     function sqlexpr(SearchQueryInfo $sqi) {
         if ($this->rpsm->test(0)
             || ($this->rpsm->preference_match
@@ -142,7 +147,7 @@ class Revpref_SearchTerm extends SearchTerm {
         }
         return $this->rpsm->test($n);
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

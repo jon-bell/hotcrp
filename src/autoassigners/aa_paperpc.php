@@ -1,6 +1,6 @@
 <?php
 // autoassigners/aa_paperpc.php -- HotCRP helper classes for autoassignment
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class PaperPC_Autoassigner extends Autoassigner {
     /** @var ?ReviewField */
@@ -24,6 +24,7 @@ class PaperPC_Autoassigner extends Autoassigner {
         $this->set_assignment_action($t);
         $this->extract_balance_method($subreq);
         $this->extract_max_load($subreq);
+        $this->extract_gadget_costs($subreq);
 
         $this->allow_incomplete = $subreq["allow_incomplete"] ?? false;
 
@@ -48,17 +49,20 @@ class PaperPC_Autoassigner extends Autoassigner {
     }
 
     private function set_load() {
-        $q = "select {$this->ass_action}ContactId, count(paperId) from Paper where paperId ?A group by {$this->ass_action}ContactId";
+        $q = "select {$this->ass_action}ContactId, count(paperId) from Paper where paperId?A group by {$this->ass_action}ContactId";
         $result = $this->conf->qe($q, $this->paper_ids());
         while (($row = $result->fetch_row())) {
             $this->add_aauser_load((int) $row[0], (int) $row[1]);
+            if ($this->balance === self::BALANCE_ALL) {
+                $this->add_aauser_balance((int) $row[0], (int) $row[1]);
+            }
         }
         Dbl::free($result);
     }
 
     private function load_preferences() {
         $time = microtime(true);
-        $this->make_elements();
+        $this->make_ae();
 
         $set = $this->conf->paper_set(["paperId" => $this->paper_ids(), "allConflictType" => true, "reviewSignatures" => true, "scores" => $this->rf ? [$this->rf] : []]);
 

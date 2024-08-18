@@ -1,6 +1,6 @@
 <?php
 // mailrecipients.php -- HotCRP mail tool
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class MailRecipientClass {
     /** @var string */
@@ -458,7 +458,7 @@ class MailRecipients extends MessageSet {
      * @return string|false */
     function query($paper_sensitive) {
         $cols = [];
-        $where = ["not disabled"];
+        $where = ["(cflags&" . Contact::CFM_DISABLEMENT . ")=0"];
         $joins = ["ContactInfo"];
 
         // reviewer limit
@@ -538,10 +538,8 @@ class MailRecipients extends MessageSet {
         }
 
         // query construction
-        assert((Contact::SLICE_MINIMAL & ~Contact::SLICE_NO_PASSWORD) === 5);
-        $q = "select ContactInfo.contactId, firstName, lastName, affiliation,
-            email, roles, contactTags, disabled, primaryContactId, 5 _slice,
-            password, preferredEmail, "
+        $q = "select " . $this->conf->user_query_fields(Contact::SLICE_MINIMAL - Contact::SLICEBIT_PASSWORD, "ContactInfo.")
+            . ", preferredEmail, "
             . ($needpaper ? "Paper.paperId" : "-1") . " paperId
             from " . join("\n", $joins)
             . "\nwhere " . join("\n    and ", $where)

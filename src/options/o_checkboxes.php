@@ -20,33 +20,18 @@ class Checkboxes_PaperOption extends CheckboxesBase_PaperOption {
         if ($this->is_ids_nontrivial()) {
             $j->ids = $this->ids();
         }
-        if ($this->min_count > 1) {
-            $j->min = $this->min_count;
-        }
-        if ($this->max_count > 0) {
-            $j->max = $this->max_count;
-        }
         return $j;
     }
 
     function export_setting() {
         $sfs = parent::export_setting();
         $this->unparse_values_setting($sfs);
-        $sfs->min = $this->min_count;
-        $sfs->max = $this->max_count;
         return $sfs;
     }
 
     /** @return TopicSet */
     function topic_set() {
-        if ($this->topics === null) {
-            $this->topics = new TopicSet($this->conf);
-            foreach ($this->values() as $i => $s) {
-                if ($s !== null)
-                    $this->topics->__add($i, $s);
-            }
-        }
-        return $this->topics;
+        return $this->values_topic_set();
     }
 
 

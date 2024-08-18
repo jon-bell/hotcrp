@@ -1,6 +1,6 @@
 <?php
 // test/setup.php -- HotCRP helper file to initialize tests
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 require_once(dirname(__DIR__) . "/src/siteloader.php");
 define("HOTCRP_OPTIONS", SiteLoader::find("test/options.php"));
@@ -51,13 +51,12 @@ class MailChecker {
             self::$preps[] = $prep;
             if (self::$print) {
                 fwrite(STDOUT, "********\n"
-                       . "To: " . join(", ", $prep->to) . "\n"
+                       . "To: " . join(", ", $prep->recipient_texts()) . "\n"
                        . "Subject: " . str_replace("\r", "", $prep->subject) . "\n"
                        . ($prep->landmark ? "X-Landmark: {$prep->landmark}\n" : "") . "\n"
                        . $prep->body);
             }
         }
-        return false;
     }
 
     static function check0() {
@@ -135,7 +134,7 @@ class MailChecker {
     static function check_match($mdb) {
         $haves = [];
         foreach (self::$preps as $prep) {
-            $haves[] = "To: " . join(", ", $prep->to) . "\n"
+            $haves[] = "To: " . join(", ", $prep->recipient_texts()) . "\n"
                 . "Subject: " . str_replace("\r", "", $prep->subject)
                 . "\n\n" . $prep->body;
         }
@@ -150,27 +149,32 @@ class MailChecker {
                 Xassert::succeed();
             } else if ($index !== false) {
                 $have = $haves[$index];
-                error_log(assert_location() . ": Mail mismatch: " . var_export($wtext, true) . " !== " . var_export($have, true));
                 $havel = explode("\n", $have);
                 $wantl = explode("\n", $wtext);
-                fwrite(STDERR, "... line {$badline} differs near {$havel[$badline-1]}\n... expected {$wantl[$badline-1]}\n");
+                $ml = [
+                    "Mail mismatch\n",
+                    "... line {$badline} differs near {$havel[$badline-1]}\n",
+                    "... expected {$wantl[$badline-1]}\n",
+                    "... ", str_replace("\n", "\n    ", rtrim($wtext)),
+                    "\n!== ", str_replace("\n", "\n    ", rtrim($wtext)), "\n"
+                ];
                 if (is_object($want) && isset($want->landmark)) {
-                    fwrite(STDERR, "... expected mail at {$want->landmark}\n");
+                    $ml[] =  "... expected mail at {$want->landmark}\n";
                 }
-                Xassert::fail();
+                Xassert::fail_with(...$ml);
             } else {
-                error_log(assert_location() . ": Mail not found: " . var_export($wtext, true));
-                Xassert::fail();
+                Xassert::fail_with("Mail not found `{$wtext}`");
             }
             if ($index !== false) {
                 array_splice($haves, $index, 1);
             }
         }
 
+        Xassert::push_failure_group();
         foreach ($haves as $have) {
-            error_log(assert_location() . ": Unexpected mail: " . var_export($have, true));
-            Xassert::fail();
+            Xassert::fail_with("Unexpected mail: " . $have);
         }
+        Xassert::pop_failure_group();
         self::$preps = [];
     }
 
@@ -260,8 +264,14 @@ class Xassert {
     static public $nerror = 0;
     /** @var int */
     static public $disabled = 0;
+    /** @var ?list<int> */
+    static private $group_stack = [];
+    /** @var ?string */
+    static public $context = null;
     /** @var bool */
     static public $stop = false;
+    /** @var ?TestRunner */
+    static public $test_runner;
     /** @var array<int,string> */
     static public $emap = [
         E_ERROR => "PHP Fatal Error",
@@ -284,6 +294,68 @@ class Xassert {
         }
     }
 
+    static function push_failure_group() {
+        self::$group_stack[] = self::$n;
+    }
+
+    static function pop_failure_group() {
+        assert(!empty(self::$group_stack));
+        $n = array_pop(self::$group_stack);
+        if (self::$n > $n) {
+            self::$n = $n + 1;
+        } else {
+            ++self::$n;
+            ++self::$nsuccess;
+        }
+    }
+
+    static function will_print() {
+        if (self::$test_runner) {
+            self::$test_runner->will_print();
+        }
+    }
+
+    static function print_landmark() {
+        list($location, $rest) = self::landmark(true);
+        $x = $location . $rest;
+        if ($x !== "") {
+            self::will_print();
+            if (!str_ends_with($x, "\n")) {
+                $x .= "\n";
+            }
+            fwrite(STDERR, $x);
+        }
+    }
+
+    /** @param list<string> $sl */
+    static private function fail_message($sl) {
+        if (self::$test_runner) {
+            self::$test_runner->will_fail();
+        }
+        if (($sl[0] ?? null) === "!") {
+            $x = join("", array_slice($sl, 1));
+        } else {
+            list($location, $rest) = self::landmark(true);
+            $x = $location . join("", $sl) . $rest;
+        }
+        if ($x !== "" && !str_ends_with($x, "\n")) {
+            $x .= "\n";
+        }
+        fwrite(STDERR, $x);
+    }
+
+    /** @param string ...$sl */
+    static function fail_with(...$sl) {
+        self::fail_message($sl);
+        self::fail();
+    }
+
+    /** @param string ...$sl */
+    static function error_with(...$sl) {
+        self::fail_message($sl);
+        ++self::$nerror;
+    }
+
     /** @param string $xprefix
      * @param string $eprefix
      * @param mixed $expected
@@ -291,10 +363,10 @@ class Xassert {
      * @param mixed $actual
      * @return string */
     static function match_failure_message($xprefix, $eprefix, $expected, $aprefix, $actual) {
-        $estr = var_export($expected, true);
-        $astr = var_export($actual, true);
+        $estr = xassert_var_export($expected);
+        $astr = xassert_var_export($actual);
         if (strlen($estr) < 20 && strlen($astr) < 20) {
-            return "{$xprefix}{$eprefix}{$estr}{$aprefix}{$astr}";
+            return "{$xprefix}{$eprefix}{$estr}{$aprefix}{$astr}\n";
         } else {
             $xprefix = rtrim($xprefix);
             if (str_starts_with($aprefix, ",")) {
@@ -303,8 +375,68 @@ class Xassert {
             $aprefix = ltrim($aprefix);
             $eprefix = str_pad($eprefix, max(strlen($eprefix), strlen($aprefix)), " ", STR_PAD_LEFT);
             $aprefix = str_pad($aprefix, strlen($eprefix), " ", STR_PAD_LEFT);
-            return "{$xprefix}\n  {$eprefix}{$estr}\n  {$aprefix}{$astr}";
+            return "{$xprefix}\n  {$eprefix}{$estr}\n  {$aprefix}{$astr}\n";
         }
+    }
+
+    /** @param ?string $location
+     * @param string $eprefix
+     * @param mixed $expected
+     * @param string $aprefix
+     * @param mixed $actual
+     * @return void */
+    static function fail_match($location, $eprefix, $expected, $aprefix, $actual) {
+        if ($location === null) {
+            list($location, $rest) = self::landmark(true);
+        } else {
+            $rest = "";
+        }
+        self::fail_with("!", self::match_failure_message($location, $eprefix, $expected, $aprefix, $actual), $rest);
+    }
+
+    /** @param bool $want_color
+     * @return array{string,string} */
+    static function landmark($want_color = false) {
+        $colorize = $want_color && self::$test_runner && self::$test_runner->color;
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+        $first = "";
+        $rest = "";
+        for ($pos = 2; isset($trace[$pos]); ++$pos) {
+            $tr = $trace[$pos];
+            $fname = (isset($tr["class"]) ? $tr["class"] . "::" : "") . $tr["function"];
+            if (preg_match('/\A[Xx]?assert|\AMailChecker::check|::x?assert/s', $fname)) {
+                continue;
+            }
+            $loc = $fname;
+            if (($file = $trace[$pos - 1]["file"] ?? null) !== null) {
+                if (str_starts_with($file, SiteLoader::$root)) {
+                    $file = substr($file, strlen(SiteLoader::$root) + 1);
+                }
+                $loc = $file . ":" . $trace[$pos - 1]["line"] . ":" . $fname;
+            } else {
+                $loc = $fname;
+            }
+            if ($first === "") {
+                if (self::$context !== null) {
+                    $loc .= " <" . self::$context . ">";
+                }
+                if ($colorize) {
+                    $first = "\x1b[1m{$loc}:\x1b[m ";
+                } else if ($want_color) {
+                    $first = "{$loc}: ";
+                } else {
+                    $first = $loc;
+                }
+            } else if ($colorize) {
+                $rest .= "  \x1b[90;1m{$loc}:\x1b[22m called from here\x1b[m\n";
+            } else {
+                $rest .= "  {$loc}: called from here\n";
+            }
+            if (preg_match('/::test[_A-Z]/', $fname)) {
+                return [$first, $rest];
+            }
+        }
+        return [$first, ""];
     }
 }
 
@@ -313,21 +445,38 @@ class Xassert {
  * @param string $file
  * @param int $line */
 function xassert_error_handler($errno, $emsg, $file, $line) {
-    if ((error_reporting() || $errno != E_NOTICE) && Xassert::$disabled <= 0) {
+    if ((error_reporting() || $errno != E_NOTICE)
+        && Xassert::$disabled <= 0) {
         if (($e = Xassert::$emap[$errno] ?? null)) {
-            $emsg = "$e:  $emsg";
+            $emsg = "{$e}:  {$emsg}";
         } else {
-            $emsg = "PHP Message $errno:  $emsg";
+            $emsg = "PHP Message {$errno}:  {$emsg}";
         }
-        fwrite(STDERR, "$emsg in $file on line $line\n");
-        ++Xassert::$nerror;
+        Xassert::error_with("!", "{$emsg} in {$file} on line {$line}\n");
     }
 }
 
 set_error_handler("xassert_error_handler");
 
-function assert_location($position = 1) {
-    return caller_landmark($position, '/(?:^x?assert|^MailChecker::check|::x?assert)/');
+/** @param mixed $x
+ * @return string */
+function xassert_var_export($x) {
+    if (is_scalar($x)) {
+        return json_encode($x);
+    } else if (is_object($x)) {
+        $cn = get_class($x);
+        $ch = spl_object_id($x);
+        $xp = "[{$cn}#{$ch}]";
+        if (($s = json_encode($x))) {
+            $s = strlen($s) > 120 ? substr($s, 0, 120) . "...}" : $s;
+            $xp .= $s;
+        }
+        return $xp;
+    } else if (($s = json_encode($x))) {
+        return strlen($s) > 121 ? substr($s, 0, 120) . "..." : $s;
+    } else {
+        return "[" . gettype($s) . "]";
+    }
 }
 
 /** @param mixed $x
@@ -337,27 +486,26 @@ function xassert($x, $description = "") {
     if ($x) {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": " . ($description ? : "Assertion failed"));
-        Xassert::fail();
+        Xassert::fail_with($description ? : "Assertion failed");
     }
     return !!$x;
 }
 
 /** @return void */
 function xassert_exit() {
-    $ok = Xassert::$nsuccess
-        && Xassert::$nsuccess == Xassert::$n
-        && !Xassert::$nerror;
+    $ok = Xassert::$nsuccess > 0
+        && Xassert::$nsuccess === Xassert::$n
+        && Xassert::$nerror === 0;
     echo ($ok ? "* " : "! "), plural(Xassert::$nsuccess, "test"), " succeeded out of ", Xassert::$n, " tried.\n";
-    if (Xassert::$nerror > Xassert::$n - Xassert::$nsuccess) {
-        $nerror = Xassert::$nerror - (Xassert::$n - Xassert::$nsuccess);
-        echo "! ", plural($nerror, "other error"), ".\n";
+    if (Xassert::$nerror !== 0) {
+        echo "! ", plural(Xassert::$nerror, "other error"), ".\n";
     }
     exit($ok ? 0 : 1);
 }
 
-/** @return bool */
-function xassert_eqq($actual, $expected) {
+/** @param ?string $location
+ * @return bool */
+function xassert_eqq($actual, $expected, $location = null) {
     $ok = $actual === $expected;
     if (!$ok && is_float($expected) && is_nan($expected) && is_float($actual) && is_nan($actual)) {
         $ok = true;
@@ -365,8 +513,7 @@ function xassert_eqq($actual, $expected) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(Xassert::match_failure_message(assert_location() . ": ", "expected === ", $expected, ", got ", $actual));
-        Xassert::fail();
+        Xassert::fail_match($location, "expected === ", $expected, ", got ", $actual);
     }
     return $ok;
 }
@@ -380,8 +527,7 @@ function xassert_neqq($actual, $nonexpected) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": Expected !== " . var_export($actual, true));
-        Xassert::fail();
+        Xassert::fail_with("Expected !== " . xassert_var_export($actual));
     }
     return $ok;
 }
@@ -401,8 +547,7 @@ function xassert_in_eqq($member, $list) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(Xassert::match_failure_message(assert_location() . ": ", "expected ", $member, " ∈ ", $list));
-        Xassert::fail();
+        Xassert::fail_match(null, "expected ", $member, " ∈ ", $list);
     }
     return $ok;
 }
@@ -422,8 +567,7 @@ function xassert_not_in_eqq($member, $list) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(Xassert::match_failure_message(assert_location() . ": ", "expected ", $member, " ∉ ", $list));
-        Xassert::fail();
+        Xassert::fail_match(null, "expected ", $member, " ∉ ", $list);
     }
     return $ok;
 }
@@ -436,8 +580,7 @@ function xassert_eq($actual, $expected) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(Xassert::match_failure_message(assert_location() . ": ", "expected == ", $expected, ", got ", $actual));
-        Xassert::fail();
+        Xassert::fail_match(null, "expected == ", $expected, ", got ", $actual);
     }
     return $ok;
 }
@@ -450,8 +593,72 @@ function xassert_neq($actual, $nonexpected) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": Expected != " . var_export($actual, true));
-        Xassert::fail();
+        Xassert::fail_with("Expected != " . var_export($actual, true));
+    }
+    return $ok;
+}
+
+/** @param null|int|float|string $actual
+ * @param null|int|float|string $expected_bound
+ * @return bool */
+function xassert_lt($actual, $expected_bound) {
+    $ok = $actual < $expected_bound;
+    if ($ok) {
+        Xassert::succeed();
+    } else {
+        Xassert::fail_match(null, "expected < ", $expected_bound, ", got ", $actual);
+    }
+    return $ok;
+}
+
+/** @param null|int|float|string $actual
+ * @param null|int|float|string $expected_bound
+ * @return bool */
+function xassert_le($actual, $expected_bound) {
+    $ok = $actual <= $expected_bound;
+    if ($ok) {
+        Xassert::succeed();
+    } else {
+        Xassert::fail_match(null, "expected <= ", $expected_bound, ", got ", $actual);
+    }
+    return $ok;
+}
+
+/** @param null|int|float|string $actual
+ * @param null|int|float|string $expected_bound
+ * @return bool */
+function xassert_ge($actual, $expected_bound) {
+    $ok = $actual >= $expected_bound;
+    if ($ok) {
+        Xassert::succeed();
+    } else {
+        Xassert::fail_match(null, "expected >= ", $expected_bound, ", got ", $actual);
+    }
+    return $ok;
+}
+
+/** @param null|int|float|string $actual
+ * @param null|int|float|string $expected_bound
+ * @return bool */
+function xassert_gt($actual, $expected_bound) {
+    $ok = $actual > $expected_bound;
+    if ($ok) {
+        Xassert::succeed();
+    } else {
+        Xassert::fail_match(null, "expected > ", $expected_bound, ", got ", $actual);
+    }
+    return $ok;
+}
+
+/** @param string $haystack
+ * @param string $needle
+ * @return bool */
+function xassert_str_starts_with($haystack, $needle) {
+    $ok = str_starts_with($haystack, $needle);
+    if ($ok) {
+        Xassert::succeed();
+    } else {
+        Xassert::fail_with("Expected `{$haystack}` to start with `{$needle}`");
     }
     return $ok;
 }
@@ -464,8 +671,7 @@ function xassert_str_contains($haystack, $needle) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": Expected `{$haystack}` to contain `{$needle}`");
-        Xassert::fail();
+        Xassert::fail_with("Expected `{$haystack}` to contain `{$needle}`");
     }
     return $ok;
 }
@@ -478,8 +684,7 @@ function xassert_not_str_contains($haystack, $needle) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": Expected `{$haystack}` not to contain `{$needle}`");
-        Xassert::fail();
+        Xassert::fail_with("Expected `{$haystack}` not to contain `{$needle}`");
     }
     return $ok;
 }
@@ -490,9 +695,7 @@ function xassert_not_str_contains($haystack, $needle) {
  * @return bool */
 function xassert_array_eqq($actual, $expected, $sort = false) {
     $problem = "";
-    if ($actual === null && $expected === null) {
-        // OK
-    } else if (is_array($actual) && is_array($expected)) {
+    if (is_array($actual) && is_array($expected)) {
         if (count($actual) !== count($expected)
             && !$sort) {
             $problem = "expected size " . count($expected) . ", got " . count($actual);
@@ -503,22 +706,23 @@ function xassert_array_eqq($actual, $expected, $sort = false) {
                 sort($actual);
                 sort($expected);
             }
-            for ($i = 0; $i < count($actual) && $i < count($expected) && !$problem; ++$i) {
+            for ($i = 0; $i < count($actual) && $i < count($expected); ++$i) {
                 if ($actual[$i] !== $expected[$i]) {
-                    $problem = Xassert::match_failure_message("value {$i} differs: ", "expected === ", $expected[$i], ", got ", $actual[$i]);
+                    $problem = rtrim(Xassert::match_failure_message("value {$i} differs: ", "expected === ", $expected[$i], ", got ", $actual[$i]));
+                    break;
                 }
             }
             if (!$problem && count($actual) !== count($expected)) {
                 $problem = "expected size " . count($expected) . ", got " . count($actual);
             }
         }
-    } else {
+    } else if ($actual !== null || $expected !== null) {
         $problem = "different types";
     }
     if ($problem === "") {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": Array assertion failed, {$problem}");
+        $ml = ["Array assertion failed, {$problem}\n"];
         if ($sort) {
             $aj = json_encode(array_slice($actual, 0, 10));
             if (count($actual) > 10) {
@@ -528,9 +732,9 @@ function xassert_array_eqq($actual, $expected, $sort = false) {
             if (count($expected) > 10) {
                 $bj .= "...";
             }
-            error_log("  expected " . $bj . ", got " . $aj);
+            $ml[] = "  expected {$bj}, got {$aj}\n";
         }
-        Xassert::fail();
+        Xassert::fail_with(...$ml);
     }
     return $problem === "";
 }
@@ -541,18 +745,17 @@ function xassert_match($a, $b) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": Expected " . var_export($a, true) . " ~= {$b}");
-        Xassert::fail();
+        Xassert::fail_with("Expected " . var_export($a, true) . " ~= {$b}");
     }
     return $ok;
 }
 
 /** @param list<int> $actual
- * @param list<int|string>|string $expected
+ * @param list<int|string>|string|int $expected
  * @return bool */
 function xassert_int_list_eqq($actual, $expected) {
     $astr = join(" ", $actual);
-    $estr = is_array($expected) ? join(" ", $expected) : $expected;
+    $estr = is_array($expected) ? join(" ", $expected) : (string) $expected;
     $estr = preg_replace_callback('/(\d+)-(\d+)/', function ($m) {
         return join(" ", range(+$m[1], +$m[2]));
     }, $estr);
@@ -560,8 +763,7 @@ function xassert_int_list_eqq($actual, $expected) {
     if ($ok) {
         Xassert::succeed();
     } else {
-        error_log(assert_location() . ": Expected {$estr}, got {$astr}");
-        Xassert::fail();
+        Xassert::fail_with("Expected {$estr}, got {$astr}");
     }
     return $ok;
 }
@@ -574,9 +776,11 @@ function xassert_int_list_eqq($actual, $expected) {
  * @return array<int,array> */
 function search_json($user, $query, $cols = "id", $allow_warnings = false) {
     $pl = new PaperList("empty", new PaperSearch($user, $query));
-    $pl->parse_view($cols);
+    $pl->parse_view($cols, PaperList::VIEWORIGIN_MAX);
     if ($pl->search->has_problem() && !$allow_warnings) {
-        error_log(assert_location() . ": Search reports warnings: " . $pl->search->full_feedback_text());
+        Xassert::will_print();
+        list($first, $rest) = Xassert::landmark(true);
+        fwrite(STDERR, "{$first}Search reports warnings: " . $pl->search->full_feedback_text() . $rest);
     }
     return $pl->text_json();
 }
@@ -587,7 +791,7 @@ function search_json($user, $query, $cols = "id", $allow_warnings = false) {
  * @return string */
 function search_text_col($user, $query, $col = "id") {
     $pl = new PaperList("empty", new PaperSearch($user, $query));
-    $pl->parse_view($col);
+    $pl->parse_view($col, PaperList::VIEWORIGIN_MAX);
     $tj = $pl->text_json();
     $colx = ($pl->vcolumns())[0]->name;
     $x = [];
@@ -599,22 +803,60 @@ function search_text_col($user, $query, $col = "id") {
 
 /** @param Contact $user
  * @param string|array $query
- * @param list<int|string>|string $expected
+ * @param list<int|string>|string|int $expected
  * @return bool */
-function assert_search_papers($user, $query, $expected) {
+function xassert_search($user, $query, $expected) {
     return xassert_int_list_eqq(array_keys(search_json($user, $query)), $expected);
 }
 
 /** @param Contact $user
  * @param string|array $query
- * @param list<int|string>|string $expected
+ * @param list<int|string>|string|int $expected
  * @return bool */
-function assert_search_papers_ignore_warnings($user, $query, $expected) {
+function xassert_search_all($user, $query, $expected) {
+    $q = is_string($query) ? ["q" => $query] : $query;
+    $q["t"] = $q["t"] ?? "all";
+    return xassert_int_list_eqq(array_keys(search_json($user, $q)), $expected);
+}
+
+/** @param Contact $user
+ * @param string|array $query
+ * @param list<int|string>|string|int $expected
+ * @return bool */
+function xassert_search_ignore_warnings($user, $query, $expected) {
     return xassert_int_list_eqq(array_keys(search_json($user, $query, "id", true)), $expected);
 }
 
 /** @param Contact $user
- * @return bool */
+ * @param string|array $query
+ * @param list<int|string>|string|int $expected
+ * @return bool
+ * @deprecated */
+function assert_search_papers($user, $query, $expected) {
+    return xassert_search($user, $query, $expected);
+}
+
+/** @param Contact $user
+ * @param string|array $query
+ * @param list<int|string>|string|int $expected
+ * @return bool
+ * @deprecated */
+function assert_search_all_papers($user, $query, $expected) {
+    return xassert_search_all($user, $query, $expected);
+}
+
+/** @param Contact $user
+ * @param string|array $query
+ * @param list<int|string>|string|int $expected
+ * @return bool
+ * @deprecated */
+function assert_search_papers_ignore_warnings($user, $query, $expected) {
+    return xassert_search_ignore_warnings($user, $query, $expected);
+}
+
+/** @param Contact $user
+ * @return bool
+ * @deprecated Use `xassert_search` instead. */
 function assert_search_ids($user, $query, $expected) {
     return xassert_int_list_eqq((new PaperSearch($user, $query))->paper_ids(), $expected);
 }
@@ -630,8 +872,8 @@ function tag_normalize_compare($a, $b) {
     $b_twiddle = strpos($b, "~");
     $ax = ($a_twiddle > 0 ? substr($a, $a_twiddle + 1) : $a);
     $bx = ($b_twiddle > 0 ? substr($b, $b_twiddle + 1) : $b);
-    if (($cmp = strcasecmp($ax, $bx)) == 0) {
-        if (($a_twiddle > 0) != ($b_twiddle > 0)) {
+    if (($cmp = strcasecmp($ax, $bx)) === 0) {
+        if (($a_twiddle > 0) !== ($b_twiddle > 0)) {
             $cmp = ($a_twiddle > 0 ? 1 : -1);
         } else {
             $cmp = strcasecmp($a, $b);
@@ -651,7 +893,7 @@ function paper_tag_normalize($prow) {
             $at = strpos($c->email, "@");
             $tag = ($at ? substr($c->email, 0, $at) : $c->email) . substr($tag, $twiddle);
         }
-        if (strlen($tag) > 2 && substr($tag, strlen($tag) - 2) == "#0") {
+        if (str_ends_with($tag, "#0")) {
             $tag = substr($tag, 0, strlen($tag) - 2);
         }
         if ($tag) {
@@ -665,11 +907,13 @@ function paper_tag_normalize($prow) {
 /** @param Contact $who
  * @return bool */
 function xassert_assign($who, $what, $override = false) {
-    $assignset = new AssignmentSet($who, $override);
+    $assignset = new AssignmentSet($who);
+    $assignset->set_override_conflicts($override);
     $assignset->parse($what);
     $ok = $assignset->execute();
     xassert($ok);
     if (!$ok) {
+        Xassert::will_print();
         fwrite(STDERR, preg_replace('/^/m', "  ", $assignset->full_feedback_text()));
     }
     return $ok;
@@ -678,7 +922,8 @@ function xassert_assign($who, $what, $override = false) {
 /** @param Contact $who
  * @return bool */
 function xassert_assign_fail($who, $what, $override = false) {
-    $assignset = new AssignmentSet($who, $override);
+    $assignset = new AssignmentSet($who);
+    $assignset->set_override_conflicts($override);
     $assignset->parse($what);
     return xassert(!$assignset->execute());
 }
@@ -699,11 +944,12 @@ function xassert_paper_status(PaperStatus $ps, $maxstatus = null) {
     }
     if (!$ok) {
         xassert($ps->problem_status() <= $xmaxstatus);
+        Xassert::will_print();
         foreach ($ps->message_list() as $mx) {
             if ($mx->status === MessageSet::INFORM && $mx->message) {
-                error_log("!     {$mx->message}");
+                fwrite(STDERR, "!     {$mx->message}\n");
             } else {
-                error_log("! {$mx->field}" . ($mx->message ? ": {$mx->message}" : ""));
+                fwrite(STDERR, "! {$mx->field}" . ($mx->message ? ": {$mx->message}\n" : "\n"));
             }
         }
     }
@@ -717,11 +963,12 @@ function xassert_paper_status_saved_nonrequired(PaperStatus $ps, $maxstatus = Me
         foreach ($ps->problem_list() as $mx) {
             if ($mx->message !== "<0>Entry required"
                 && $mx->message !== "<0>Entry required to complete submission") {
+                Xassert::will_print();
                 if (!$asserted) {
                     xassert($ps->problem_status() <= $maxstatus);
                     $asserted = true;
                 }
-                error_log("! {$mx->field}" . ($mx->message ? ": {$mx->message}" : ""));
+                fwrite(STDERR, "! {$mx->field}" . ($mx->message ? ": {$mx->message}\n" : "\n"));
             }
         }
     }
@@ -781,19 +1028,34 @@ function checked_fresh_review($prow, $user) {
     }
 }
 
-/** @param Contact $user
+/** @param int|PaperInfo $prow
+ * @param Contact $user
+ * @param ?ReviewInfo $rrow
  * @return ?ReviewInfo */
-function save_review($paper, $user, $revreq, $rrow = null) {
-    $pid = is_object($paper) ? $paper->paperId : $paper;
-    $prow = $user->conf->checked_paper_by_id($pid, $user);
+function save_review($prow, $user, $revreq, $rrow = null, $args = []) {
+    if (is_int($prow)) {
+        $prow = $user->conf->checked_paper_by_id($prow, $user);
+    }
     $rf = Conf::$main->review_form();
     $tf = new ReviewValues($rf);
-    $tf->parse_qreq(new Qrequest("POST", $revreq), false);
-    $tf->check_and_save($user, $prow, $rrow ?? fresh_review($prow, $user));
-    foreach ($tf->problem_list() as $mx) {
-        error_log("! {$mx->field}" . ($mx->message ? ": {$mx->message}" : ""));
+    $tf->parse_qreq(new Qrequest("POST", $revreq));
+    $rrowx = $rrow ?? $prow->fresh_review_by_user($user);
+    $tf->check_and_save($user, $prow, $rrowx);
+    if (!($args["quiet"] ?? false)) {
+        foreach ($tf->problem_list() as $mx) {
+            Xassert::will_print();
+            if ($mx->field) {
+                fwrite(STDERR, "! {$mx->field}" . ($mx->message ? ": {$mx->message}\n" : "\n"));
+            } else if ($mx->message) {
+                fwrite(STDERR, "! {$mx->message}\n");
+            }
+        }
     }
-    return fresh_review($prow, $user);
+    if ($rrowx) {
+        return $prow->fresh_review_by_id($rrowx->reviewId);
+    } else {
+        return $prow->fresh_review_by_user($user);
+    }
 }
 
 /** @return Contact */
@@ -842,7 +1104,7 @@ function sorted_conflicts(PaperInfo $prow, $flags) {
         if (($cu->conflictType >= CONFLICT_AUTHOR
              ? ($flags & TESTSC_CONTACTS) !== 0
              : ($flags & TESTSC_CONFLICTS) !== 0)
-            && ($cu->user->disablement === 0 || ($flags & TESTSC_DISABLED) !== 0))
+            && (!$cu->user->is_dormant() || ($flags & TESTSC_DISABLED) !== 0))
             $c[] = $cu->user->email;
     }
     sort($c);
@@ -853,13 +1115,56 @@ function sorted_conflicts(PaperInfo $prow, $flags) {
 class TestRunner {
     static public $original_opt;
     /** @var bool */
-    static public $verbose = false;
+    private $verbose;
+    /** @var bool */
+    private $reset;
+    /** @var bool */
+    private $need_reset;
+    /** @var ?bool
+     * @readonly */
+    public $color;
+    /** @var int */
+    private $width = 47;
+    /** @var ?string */
+    private $last_classname;
+    /** @var ?object */
+    private $tester;
+    /** @var bool */
+    private $need_newline = false;
+    /** @var ?string */
+    private $verbose_test;
+
+
+    function __construct($arg) {
+        $this->verbose = isset($arg["verbose"]);
+        if (isset($arg["stop"])) {
+            Xassert::$stop = true;
+        }
+        if (isset($arg["no-cdb"])) {
+            Conf::$main->set_opt("contactdbDsn", null);
+        }
+        if (isset($arg["reset"])) {
+            $this->reset = true;
+        } else if (isset($arg["no-reset"])) {
+            $this->reset = false;
+        } else {
+            $this->reset = null;
+        }
+        $this->need_reset = true;
+        if (isset($arg["color"])) {
+            $this->color = true;
+        } else if (isset($arg["no-color"])) {
+            $this->color = false;
+        } else {
+            $this->color = posix_isatty(STDERR);
+        }
+    }
 
     static private function setup_assignments($assignments, Contact $user) {
         if (is_array($assignments)) {
             $assignments = join("\n", $assignments);
         }
-        $assignset = (new AssignmentSet($user))->override_conflicts();
+        $assignset = (new AssignmentSet($user))->set_override_conflicts(true);
         $assignset->parse($assignments);
         if (!$assignset->execute()) {
             error_log("* Failed to run assignments:\n" . $assignset->full_feedback_text());
@@ -924,25 +1229,31 @@ class TestRunner {
         $timer = new ProfileTimer;
         MailChecker::clear();
 
-        // Initialize from an empty database.
+        // Initialize from an empty database
         self::reset_schema($conf->dblink, SiteLoader::find("src/schema.sql"), $rebuild);
         $timer->mark("schema");
 
-        // No setup phase.
+        // No setup phase; initial review rounds
         $conf->qe_raw("delete from Settings where name='setupPhase'");
+        $conf->qe("insert into Settings (name, value, data) values (?, ?, ?) ?U on duplicate key update data=?U(data)", "tag_rounds", 1, "R1 R2 R3");
         self::reset_options(true);
         $timer->mark("settings");
 
         // Contactdb.
         if (($cdb = $conf->contactdb())) {
             self::reset_schema($cdb, SiteLoader::find("test/cdb-schema.sql"), $rebuild);
-            $cdb->query("insert into Conferences set dbname='" . $cdb->real_escape_string($conf->dbname) . "'");
+            Dbl::qe($cdb, "insert into Conferences set confuid=?", $conf->dbname);
             Contact::$props["demoBirthday"] = Contact::PROP_CDB | Contact::PROP_NULL | Contact::PROP_INT | Contact::PROP_IMPORT;
         }
         $timer->mark("contactdb");
 
         // Create initial administrator user.
-        $user_chair = Contact::make_keyed($conf, ["email" => "chair@_.com", "name" => "Jane Chair"])->store();
+        $user_chair = Contact::make_keyed($conf, ["email" => "chair@_.com", "name" => "Jane Chair"]);
+        assert($user_chair->firstName === "Jane");
+        $user_chair = $user_chair->store();
+        assert($user_chair->firstName === "Jane");
+        $x = $conf->fresh_user_by_email("chair@_.com");
+        assert($x->firstName === "Jane");
         $user_chair->save_roles(Contact::ROLE_ADMIN | Contact::ROLE_CHAIR | Contact::ROLE_PC, $user_chair);
 
         // Load data.
@@ -983,23 +1294,6 @@ class TestRunner {
         self::setup_assignments($json->assignments_1, $user_chair);
         $timer->mark("assignment");
         MailChecker::clear();
-    }
-
-    /** @param object $testo
-     * @param string $methodmatch */
-    static function run_object($testo, $methodmatch = "") {
-        $ro = new ReflectionObject($testo);
-        foreach ($ro->getMethods() as $m) {
-            if (str_starts_with($m->name, "test")
-                && strlen($m->name) > 4
-                && ($m->name[4] === "_" || ctype_upper($m->name[4]))
-                && ($methodmatch === "" || fnmatch($methodmatch, $m->name))) {
-                if (self::$verbose) {
-                    fwrite(STDERR, $ro->getName() . "::" . $m->name . "...\n");
-                }
-                $testo->{$m->name}();
-            }
-        }
     }
 
     /** @param Contact $user
@@ -1043,97 +1337,159 @@ class TestRunner {
             $urlp["path"] ?? "/";
     }
 
+
+    function will_print() {
+        if ($this->need_newline) {
+            if ($this->color) {
+                fwrite(STDERR, "\r{$this->verbose_test}\x1b[K\n");
+            } else {
+                fwrite(STDERR, "\n");
+            }
+            $this->need_newline = false;
+        }
+    }
+
+    function will_fail() {
+        if ($this->verbose_test !== null) {
+            if ($this->color) {
+                fwrite(STDERR, "\r{$this->verbose_test} \x1b[01;31mFAIL\x1b[m\n");
+            } else {
+                fwrite(STDERR, " FAIL\n");
+            }
+            $this->verbose_test = null;
+            $this->need_newline = false;
+        }
+    }
+
+    /** @param object $testo
+     * @param string $methodmatch */
+    private function run_object_tests($testo, $methodmatch) {
+        $ro = new ReflectionObject($testo);
+        foreach ($ro->getMethods() as $m) {
+            if (str_starts_with($m->name, "test")
+                && strlen($m->name) > 4
+                && ($m->name[4] === "_" || ctype_upper($m->name[4]))
+                && ($methodmatch === "" || fnmatch($methodmatch, $m->name))) {
+                if ($this->verbose) {
+                    $mpfx = str_pad("{$ro->getName()}::{$m->name} ", $this->width, ".");
+                    if (strlen($mpfx) > $this->width) {
+                        $mpfx = rtrim($mpfx);
+                    }
+                    if ($this->color) {
+                        fwrite(STDERR, "{$mpfx} \x1b[01;36mRUN\x1b[m");
+                    } else {
+                        fwrite(STDERR, $mpfx);
+                    }
+                    $this->verbose_test = $mpfx;
+                    $this->need_newline = true;
+                    $before_nfail = Xassert::$n - Xassert::$nsuccess;
+                    $before_nerror = Xassert::$nerror;
+                    $testo->{$m->name}();
+                    $fail = Xassert::$n - Xassert::$nsuccess > $before_nfail;
+                    $ok = !$fail && Xassert::$nerror === $before_nerror;
+                    if ($this->verbose_test !== null) {
+                        if ($this->color) {
+                            $pfx = ($this->need_newline ? "\r" : "") . $mpfx;
+                            if ($ok) {
+                                $sfx = " \x1b[01;32m OK\x1b[m\x1b[K";
+                            } else if (!$fail) {
+                                $sfx = " \x1b[01;36mERROR\x1b[m\x1b[K";
+                            } else {
+                                $sfx = " \x1b[01;31mFAIL\x1b[m";
+                            }
+                        } else {
+                            $pfx = $this->need_newline ? "" : $mpfx;
+                            if ($ok) {
+                                $sfx = "  OK";
+                            } else if (!$fail) {
+                                $sfx = " ERROR";
+                            } else {
+                                $sfx = " FAIL";
+                            }
+                        }
+                        fwrite(STDERR, "{$pfx}{$sfx}\n");
+                    }
+                    $this->verbose_test = null;
+                    $this->need_newline = false;
+                } else {
+                    $testo->{$m->name}();
+                }
+            }
+        }
+    }
+
+    private function run_test($test) {
+        if ($test === "no_argv") {
+            return;
+        } else if ($test === "no_cdb") {
+            Conf::$main->set_opt("contactdbDsn", null);
+            Conf::$main->invalidate_caches(["cdb" => true]);
+            $this->last_classname = null;
+            return;
+        } else if ($test === "reset_db") {
+            if (!$this->reset) {
+                $this->need_reset = $this->reset = true;
+            }
+            $this->last_classname = null;
+            return;
+        } else if ($test === "clear_db") {
+            $this->need_reset = true;
+            $this->last_classname = null;
+            return;
+        }
+
+        $methodmatch = "";
+        if (($pos = strpos($test, "::")) !== false) {
+            $methodmatch = substr($test, $pos + 2);
+            $test = substr($test, 0, $pos);
+        }
+        if (strpos($test, "_") === false && ctype_alpha($test[0])) {
+            $test .= "_Tester";
+        }
+
+        if ($test !== $this->last_classname || $methodmatch === "") {
+            $class = new ReflectionClass($test);
+            $ctor = $class->getConstructor();
+            if ($ctor && $ctor->getNumberOfParameters() === 1) {
+                if ($this->reset ?? $this->need_reset) {
+                    self::reset_db($this->reset ?? false);
+                    $this->need_reset = false;
+                    $this->reset = null;
+                }
+                $this->tester = $class->newInstance(Conf::$main);
+            } else {
+                assert(!$ctor || $ctor->getNumberOfParameters() === 0);
+                $this->tester = $class->newInstance();
+            }
+            $this->last_classname = $test;
+        }
+        $this->run_object_tests($this->tester, $methodmatch);
+    }
+
     /** @param 'no_cdb'|'reset_db'|class-string ...$tests */
     static function run(...$tests) {
-        $i = 0;
-
-        if (($tests[$i] ?? "") === "no_argv") {
-            ++$i;
+        if (($tests[0] ?? "") === "no_argv") {
             $arg = [];
         } else {
             global $argv;
             $arg = (new Getopt)->long(
                 "verbose,V be verbose",
                 "help,h !",
-                "reset-db,reset reset test database",
-                "no-reset-db,no-reset !",
+                "reset,reset reset test database",
+                "no-reset,no-reset-db,R do not reset test database",
                 "no-cdb no contact database",
-                "stop,s stop on first error"
+                "stop,s stop on first error",
+                "color !",
+                "no-color !"
             )->description("Usage: php test/" . basename($_SERVER["PHP_SELF"]) . " [-V] [CLASSNAME...]")
              ->helpopt("help")
              ->parse($argv);
         }
 
-        if (isset($arg["verbose"])) {
-            TestRunner::$verbose = true;
-        }
-        if (isset($arg["stop"])) {
-            Xassert::$stop = true;
-        }
-        if (isset($arg["no-cdb"])) {
-            Conf::$main->set_opt("contactdbDsn", null);
-        }
-
-        if (isset($arg["reset-db"])) {
-            $reset = true;
-        } else if (isset($arg["no-reset-db"])) {
-            $reset = false;
-        } else {
-            $reset = null;
-        }
-        $need_reset = true;
-
-        $last_classname = $tester = null;
-        if (!empty($arg["_"])) {
-            $tests = $arg["_"];
-            $i = 0;
-        }
-        for (; $i < count($tests); ++$i) {
-            $classname = $tests[$i];
-            if ($classname === "no_cdb") {
-                Conf::$main->set_opt("contactdbDsn", null);
-                Conf::$main->invalidate_caches(["cdb" => true]);
-                $last_classname = null;
-                continue;
-            } else if ($classname === "reset_db") {
-                if (!$reset) {
-                    $need_reset = $reset = true;
-                }
-                $last_classname = null;
-                continue;
-            } else if ($classname === "clear_db") {
-                if (!$need_reset) {
-                    $need_reset = true;
-                }
-                $last_classname = null;
-                continue;
-            }
-
-            if (strpos($classname, "_") === false && ctype_alpha($classname[0])) {
-                $classname .= "_Tester";
-            }
-            $methodmatch = "";
-            if (($pos = strpos($classname, "::")) !== false) {
-                $methodmatch = substr($classname, $pos + 2);
-                $classname = substr($classname, 0, $pos);
-            }
-            if ($classname !== $last_classname || $methodmatch === "") {
-                $class = new ReflectionClass($classname);
-                $ctor = $class->getConstructor();
-                if ($ctor && $ctor->getNumberOfParameters() === 1) {
-                    if ($need_reset) {
-                        self::reset_db($reset ?? false);
-                        $need_reset = false;
-                        $reset = null;
-                    }
-                    $tester = $class->newInstance(Conf::$main);
-                } else {
-                    assert(!$ctor || $ctor->getNumberOfParameters() === 0);
-                    $tester = $class->newInstance();
-                }
-                $last_classname = $classname;
-            }
-            self::run_object($tester, $methodmatch);
+        $tr = new TestRunner($arg);
+        Xassert::$test_runner = $tr;
+        foreach (empty($arg["_"]) ? $tests : $arg["_"] as $test) {
+            $tr->run_test($test);
         }
         xassert_exit();
     }

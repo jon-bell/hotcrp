@@ -25,7 +25,7 @@ class Mail_Page {
         if ($viewer->privChair) {
             $this->search_topt["s"] = PaperSearch::$search_type_names["s"];
             if ($this->conf->has_any_accepted()) {
-                $this->search_topt["acc"] = PaperSearch::$search_type_names["acc"];
+                $this->search_topt["accepted"] = PaperSearch::$search_type_names["accepted"];
             }
             $this->search_topt["unsub"] = "Unsubmitted";
             $this->search_topt["all"] = PaperSearch::$search_type_names["all"];
@@ -89,6 +89,10 @@ class Mail_Page {
         } else if (!isset($qreq->p) && isset($qreq->pap)) {
             $qreq->set_a("p", $qreq->has_a("pap") ? $qreq->get_a("pap") : preg_split('/\s+/', $qreq->pap));
         }
+        if (!$qreq->has_plimit && $qreq->has_a("p") && !isset($qreq->recheck)) {
+            $qreq->plimit = "1";
+        }
+
         // It's OK to just set $qreq->p from the input without
         // validation because MailRecipients filters internally
         if (isset($qreq->prevt) && isset($qreq->prevq)) {
@@ -100,22 +104,24 @@ class Mail_Page {
                 $qreq->recheck = "1";
             }
         }
-        $papersel = null;
-        if ($qreq->has_plimit || $qreq->plimit) {
-            if ($qreq->plimit) {
-                $search = new PaperSearch($this->viewer, ["t" => $qreq->t, "q" => $qreq->q]);
-                $papersel = $search->paper_ids();
-                sort($papersel);
-            }
-        } else if ($qreq->has_a("p") && !isset($qreq->recheck)) {
-            $papersel = [];
-            foreach ($qreq->get_a("p") as $p) {
-                if (($p = cvtint($p)) > 0)
-                    $papersel[] = $p;
-            }
+
+        if ($qreq->plimit) {
+            $search = new PaperSearch($this->viewer, ["t" => $qreq->t, "q" => $qreq->q]);
+            $papersel = $search->paper_ids();
             sort($papersel);
-            $qreq->q = join(" ", $papersel);
-            $qreq->plimit = 1;
+
+            if ($qreq->has_a("p") && !isset($qreq->recheck)) {
+                $chksel = [];
+                foreach ($qreq->get_a("p") as $p) {
+                    if (($p = stoi($p) ?? -1) > 0)
+                        $chksel[] = $p;
+                }
+                sort($chksel);
+                if ($chksel !== $papersel) {
+                    $papersel = $chksel;
+                    $qreq->q = join(" ", $chksel);
+                }
+            }
         } else {
             $qreq->q = "";
             $papersel = null;
@@ -153,7 +159,7 @@ class Mail_Page {
     function print_review_requests() {
         $plist = new PaperList("reqrevs", new PaperSearch($this->viewer, ["t" => "req", "q" => ""]));
         $plist->set_table_id_class("foldpl", "fullw");
-        $plist->set_view("sel", false);
+        $plist->set_view("sel", false, PaperList::VIEWORIGIN_MAX);
         if ($plist->is_empty()) {
             $this->conf->warning_msg("<5>You have not requested any external reviews. " . Ht::link("Return home", $this->conf->hoturl("index")));
         } else {
@@ -207,8 +213,8 @@ class Mail_Page {
                 && $o->on_render_context(FieldRender::CFMAIL);
         });
         usort($opts, function ($a, $b) {
-            if ($a->final !== $b->final) {
-                return $a->final ? 1 : -1;
+            if ($a->is_final() !== $b->is_final()) {
+                return $a->is_final() ? 1 : -1;
             } else {
                 return PaperOption::compare($a, $b);
             }

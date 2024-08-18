@@ -7,7 +7,7 @@
 	width: 22.5%;
 }
 body.paper {
-	background: linear-gradient(to right, #e2e9ec, #e2e9ec 22.5%, white 22.5%, white);
+	background: linear-gradient(to right, var(--submission-bg), var(--submission-bg) 22.5%, var(--paper) 22.5%, var(--paper));
 }
 .pcard {
 	margin-left: 22.5%;
@@ -32,6 +32,12 @@ body.paper {
 .paperinfo-c {
 	padding-right: 0;
 }
+.ple {
+	margin-left: 0;
+}
+.plet {
+	min-width: 7rem;
+}
 }
 
 @media screen and (max-width: 768px) {
@@ -54,7 +60,7 @@ h1.leftmenu, h2.leftmenu {
 	margin-bottom: 8px;
 }
 body.leftmenu, body.paper {
-	background: white;
+	background: var(--paper);
 }
 body.leftmenu #p-header {
 	background: #ecf2f4;
@@ -112,7 +118,8 @@ h2.paptitle {
 }
 .pspcard {
 	padding: 8px 16px;
-	border-bottom: 1px solid #f33360;
+	border-bottom: 1px solid var(--brand-fg);
+	z-index: 0;
 }
 .pspcard-open {
 	padding-bottom: 4px;
@@ -205,6 +212,9 @@ table.pltable {
 td.pl.pl_title, td.pl.pl_text {
 	min-width: 20rem;
 }
+.plet {
+	min-width: 6rem;
+}
 .reinfotable {
 	font-size: smaller;
 	margin-top: -0.25em;
@@ -212,8 +222,7 @@ td.pl.pl_title, td.pl.pl_text {
 .rfd1, .rfd2 {
 	max-width: none;
 }
-.settings-sf-view, .settings-rf-view,
-.settings-sf-edit, .settings-rf-edit {
+.settings-xf-view, .settings-xf-edit {
 	padding: 6px 8px;
 }
 .settings-json-panels {
@@ -229,10 +238,14 @@ td.pl.pl_title, td.pl.pl_text {
 .w-text, .w-entry-text,
 .feedback, .feedback-list, .field-d,
 .revtext.format0, .cmttext.format0, .revtext .format0, .cmttext .format0,
-.overlong-expander,
-.main-column p, .main-column dl, .main-column pre.sample,
-.main-column ul, .main-column ol {
+.overlong-expander {
 	max-width: initial;
+}
+@layer theme {
+.main-column p, .main-column dl, .main-column pre.sample,
+.main-column ul, .main-column ol, .main-column ul.ctable {
+	max-width: initial;
+}
 }
 }
 
@@ -240,5 +253,8 @@ td.pl.pl_title, td.pl.pl_text {
 .revcard-render {
 	display: block;
 	margin-bottom: 0;
+}
+.plet {
+	min-width: 5rem;
 }
 }

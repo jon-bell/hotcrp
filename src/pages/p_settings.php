@@ -1,6 +1,6 @@
 <?php
 // pages/p_settings.php -- HotCRP chair-only conference settings management page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Settings_Page {
     /** @var Conf */
@@ -72,7 +72,7 @@ class Settings_Page {
             $qreq->set_csession("settings_highlight", $this->sv->message_field_map());
             if (!empty($this->sv->changed_keys())) {
                 $this->conf->success_msg("<0>Changes saved");
-            } else {
+            } else if (!$this->sv->has_success()) {
                 $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
             }
             $this->sv->report();
@@ -97,22 +97,24 @@ class Settings_Page {
         echo Ht::unstash(), // clear out other script references
             $this->conf->make_script_file("scripts/settings.js"), "\n",
 
-            Ht::form($this->conf->hoturl("=settings", "group={$group}"),
-                     ["id" => "f-settings", "class" => "need-unload-protection"]),
-
+            Ht::form($this->conf->hoturl("=settings", "group={$group}"), [
+                "id" => "f-settings",
+                "name" => base64_encode(random_bytes(8)), // prevent FF from autofilling on reload
+                "class" => "need-diff-check need-unload-protection"
+            ]),
             '<div class="leftmenu-left"><nav class="leftmenu-menu">',
             '<h1 class="leftmenu"><button type="button" class="q uic js-leftmenu">Settings</button></h1>',
             '<ul class="leftmenu-list">';
         foreach ($this->sv->group_members("") as $gj) {
             $title = $gj->short_title ?? $gj->title;
             if ($gj->name === $group) {
-                echo '<li class="leftmenu-item active">', $title, '</li>';
-            } else if ($gj->title) {
-                echo '<li class="leftmenu-item ui js-click-child">',
-                    '<a href="', $this->conf->hoturl("settings", "group={$gj->name}"), '">', $title, '</a></li>';
+                echo '<li class="leftmenu-item active">', $title ?? "(Unlisted)", '</li>';
+            } else if ($title && !($gj->unlisted ?? false)) {
+                echo '<li class="leftmenu-item ui js-click-child"><a href="',
+                    $this->conf->hoturl("settings", "group={$gj->name}"), '">', $title, '</a></li>';
             }
         }
-        echo '</ul><div class="leftmenu-if-left if-alert mt-5">',
+        echo '</ul><div class="leftmenu-if-left if-differs mt-5">',
             Ht::submit("update", "Save changes", ["class" => "btn-primary"]),
             "</div></nav></div>\n",
             '<main class="leftmenu-content main-column">';
@@ -124,7 +126,7 @@ class Settings_Page {
         }
 
         echo "</main></form>\n";
-        Ht::stash_script('hiliter_children("#f-settings")');
+        Ht::stash_script('$("#f-settings").awaken()');
         $qreq->print_footer();
     }
 
@@ -147,12 +149,14 @@ class Settings_Page {
             // don't crosscheck) but reduces duplicate warnings
             $sv->report();
         }
-        $sv->print_group(strtolower($group), true);
+        $sv->cs()->print_body_members(strtolower($group));
 
-        echo '<div class="aab aabig mt-7">',
-            '<div class="aabut">', Ht::submit("update", "Save changes", ["class" => "btn-primary"]), '</div>',
-            '<div class="aabut">', Ht::submit("cancel", "Cancel", ["formnovalidate" => true]), '</div>',
-            '<hr class="c"></div>';
+        if ($sv->inputs_printed()) {
+            echo '<div class="aab aabig mt-7">',
+                '<div class="aabut">', Ht::submit("update", "Save changes", ["class" => "btn-primary"]), '</div>',
+                '<div class="aabut">', Ht::submit("cancel", "Cancel", ["formnovalidate" => true]), '</div>',
+                '<hr class="c"></div>';
+        }
     }
 
     private function print_list() {
@@ -163,7 +167,7 @@ class Settings_Page {
             if (isset($gj->title)) {
                 echo '<dt><strong><a href="', $this->conf->hoturl("settings", "group={$gj->name}"), '">',
                     $gj->title, '</a></strong></dt><dd>',
-                    Ftext::unparse_as($gj->description ?? "", 5), "</dd>\n";
+                    Ftext::as(5, $gj->description ?? ""), "</dd>\n";
             }
         }
         echo "</dl>\n";

@@ -11,40 +11,65 @@
     {
         "name": "lead",
         "function": "+PaperPC_Autoassigner",
-        "parameters": ["score", "allow_incomplete", "method", "balance"]
+        "parameters": ["?score", "?allow_incomplete {bool}", "?method", "?balance", "?max_load", "?max_load_tag"]
     },
     {
         "name": "shepherd",
         "function": "+PaperPC_Autoassigner",
-        "parameters": ["score", "allow_incomplete", "method", "balance"]
+        "parameters": ["?score", "?allow_incomplete {bool}", "?method", "?balance", "?max_load", "?max_load_tag"]
+    },
+    {
+        "name": "__review_parameters",
+        "parameters": [
+            "?rtype Review type",
+            "?round Review round",
+            "?method",
+            "?balance",
+            "?load",
+            "?max_load",
+            "?max_load_tag",
+            "?gadget",
+            "?assignment_cost",
+            "?preference_cost",
+            "?expertise_x_cost",
+            "?expertise_y_cost"
+        ]
     },
     {
         "name": "review",
         "function": "+Review_Autoassigner",
         "parameters": [
-            "count =N Number of assignments",
-            "rtype Review type",
-            "round Review round",
-            "method",
-            "balance",
-            "load",
-            "max_load",
-            "max_load_tag =TAG"
+            "count {n} Number of reviews to assign per paper",
+            "$__review_parameters"
         ]
     },
     {
         "name": "review_ensure",
         "function": "+Review_Autoassigner",
-        "parameters": ["count", "rtype", "round", "method", "balance"]
+        "parameters": [
+            "count {n} Number of reviews to ensure per paper",
+            "$__review_parameters"
+        ]
+    },
+    {
+        "name": "review_adjust",
+        "function": "+Review_Autoassigner",
+        "parameters": [
+            "count {n} Number of reviews to ensure per paper",
+            "$__review_parameters"
+        ]
     },
     {
         "name": "review_per_pc",
         "function": "+Review_Autoassigner",
-        "parameters": ["count", "rtype", "round", "method", "balance"]
+        "parameters": [
+            "count {n} Number of reviews to assign per PC member",
+            "$__review_parameters"
+        ]
     },
     {
         "name": "discussion_order",
         "function": "+DiscussionOrder_Autoassigner",
-        "parameters": ["tag"]
+        "parameters": ["tag {tag} Destination tag"]
     }
 ]

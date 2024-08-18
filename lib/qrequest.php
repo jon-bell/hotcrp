@@ -1,6 +1,6 @@
 <?php
 // qrequest.php -- HotCRP helper class for request objects (no warnings)
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSerializable {
     /** @var ?Conf */
@@ -377,7 +377,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
      * @return $this */
     function set_file($name, $finfo) {
         if (is_array($finfo)) {
-            $this->_files[$name] = new QrequestFile($finfo);
+            $this->_files[$name] = QrequestFile::make_finfo($finfo);
         } else {
             $this->_files[$name] = $finfo;
         }
@@ -389,12 +389,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
      * @param ?string $mimetype
      * @return $this */
     function set_file_content($name, $content, $filename = null, $mimetype = null) {
-        $this->_files[$name] = new QrequestFile([
-            "name" => $filename ?? "__set_file_content.$name",
-            "type" => $mimetype,
-            "size" => strlen($content),
-            "content" => $content
-        ]);
+        $this->_files[$name] = QrequestFile::make_string($content, $filename, $mimetype);
         return $this;
     }
     /** @return bool */
@@ -412,41 +407,34 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         return $this->_files[$name] ?? null;
     }
     /** @param string $name
-     * @return string|false */
+     * @return ?string */
     function file_filename($name) {
-        $fn = false;
-        if (array_key_exists($name, $this->_files)) {
-            $fn = $this->_files[$name]->name;
-        }
-        return $fn;
+        $f = $this->_files[$name] ?? null;
+        return $f ? $f->name : null;
     }
     /** @param string $name
      * @return int|false */
     function file_size($name) {
-        $sz = false;
-        if (array_key_exists($name, $this->_files)) {
-            $sz = $this->_files[$name]->size;
-        }
-        return $sz;
+        $f = $this->_files[$name] ?? null;
+        return $f ? $f->size : false;
     }
     /** @param string $name
      * @param int $offset
      * @param ?int $maxlen
      * @return string|false */
-    function file_contents($name, $offset = 0, $maxlen = null) {
-        $data = false;
-        if (array_key_exists($name, $this->_files)) {
-            $finfo = $this->_files[$name];
-            if (isset($finfo->content)) {
-                $data = substr($finfo->content, $offset, $maxlen ?? PHP_INT_MAX);
-            } else if ($maxlen === null) {
-                $data = @file_get_contents($finfo->tmp_name, false, null, $offset);
-            } else {
-                $data = @file_get_contents($finfo->tmp_name, false, null, $offset, $maxlen);
-            }
-        }
-        return $data;
+    function file_content($name, $offset = 0, $maxlen = null) {
+        $f = $this->_files[$name] ?? null;
+        return $f ? $f->content($offset, $maxlen) : false;
     }
+    /** @param string $name
+     * @param int $offset
+     * @param ?int $maxlen
+     * @return string|false
+     * @deprecated */
+    function file_contents($name, $offset = 0, $maxlen = null) {
+        return $this->file_content($name, $offset, $maxlen);
+    }
+    /** @return array<string,QrequestFile> */
     function files() {
         return $this->_files;
     }
@@ -508,19 +496,17 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
      * @return ?bool */
     function xt_allow($e) {
         if ($e === "post") {
-            return $this->_method === "POST" && $this->_post_ok;
+            return $this->_post_ok && $this->_method === "POST";
         } else if ($e === "anypost") {
             return $this->_method === "POST";
         } else if ($e === "getpost") {
             return in_array($this->_method, ["POST", "GET", "HEAD"]) && $this->_post_ok;
+        } else if ($e === "get") {
+            return $this->_method === "GET";
+        } else if ($e === "head") {
+            return $this->_method === "HEAD";
         } else if (str_starts_with($e, "req.")) {
-            foreach (explode(" ", $e) as $w) {
-                if (str_starts_with($w, "req.")
-                    && $this->has(substr($w, 4))) {
-                    return true;
-                }
-            }
-            return false;
+            return $this->has(substr($e, 4));
         } else {
             return null;
         }
@@ -605,28 +591,40 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
 
     /** @param string $name
      * @param string $value
-     * @param int $expires_at */
-    function set_cookie($name, $value, $expires_at) {
-        $secure = $this->_conf->opt("sessionSecure") ?? false;
-        $samesite = $this->_conf->opt("sessionSameSite") ?? "Lax";
-        $opt = [
-            "expires" => $expires_at,
-            "path" => $this->_navigation->base_path,
-            "domain" => $this->_conf->opt("sessionDomain") ?? "",
-            "secure" => $secure
-        ];
-        if ($samesite && ($secure || $samesite !== "None")) {
-            $opt["samesite"] = $samesite;
+     * @param array $opt */
+    function set_cookie_opt($name, $value, $opt) {
+        $opt["path"] = $opt["path"] ?? $this->_navigation->base_path;
+        $opt["domain"] = $opt["domain"] ?? $this->_conf->opt("sessionDomain") ?? "";
+        $opt["secure"] = $opt["secure"] ?? $this->_conf->opt("sessionSecure") ?? false;
+        if (!isset($opt["samesite"])) {
+            $samesite = $this->_conf->opt("sessionSameSite") ?? "Lax";
+            if ($samesite && ($opt["secure"] || $samesite !== "None")) {
+                $opt["samesite"] = $samesite;
+            }
         }
         if (!hotcrp_setcookie($name, $value, $opt)) {
             error_log(debug_string_backtrace());
         }
     }
 
+    /** @param string $name
+     * @param string $value
+     * @param int $expires_at */
+    function set_cookie($name, $value, $expires_at) {
+        $this->set_cookie_opt($name, $value, ["expires" => $expires_at]);
+    }
+
+    /** @param string $name
+     * @param string $value
+     * @param int $expires_at */
+    function set_httponly_cookie($name, $value, $expires_at) {
+        $this->set_cookie_opt($name, $value, ["expires" => $expires_at, "httponly" => true]);
+    }
+
 
     /** @param string|list<string> $title
      * @param string $id
-     * @param array{paperId?:int|string,body_class?:string,action_bar?:string,title_div?:string,subtitle?:string,save_messages?:bool} $extra */
+     * @param array{paperId?:int|string,body_class?:string,action_bar?:string,title_div?:string,subtitle?:string,save_messages?:bool,hide_title?:bool,hide_header?:bool} $extra */
     function print_header($title, $id, $extra = []) {
         if (!$this->_conf->_header_printed) {
             $this->_conf->print_head_tag($this, $title, $extra);
@@ -637,7 +635,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     function print_footer() {
         echo '<hr class="c"></div>', // close #p-body
             '</div>',                // close #p-page
-            '<div id="p-footer">',
+            '<div id="p-footer" class="need-banner-offset banner-bottom">',
             $this->_conf->opt("extraFooter") ?? "",
             '<a class="noq" href="https://hotcrp.com/">HotCRP</a>';
         if (!$this->_conf->opt("noFooterVersion")) {
@@ -673,7 +671,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         return $this->_active_list;
     }
 
-    function set_active_list(SessionList $list = null) {
+    function set_active_list(?SessionList $list) {
         assert($this->_active_list === false);
         $this->_active_list = $list;
     }
@@ -749,18 +747,50 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         }
     }
 
-    /** @param bool $allow_empty
-     * @return string */
-    function post_value($allow_empty = false) {
-        $sid = $this->_qsession->sid;
-        if ($sid === null && !$allow_empty) {
+    /** @return string */
+    function post_value() {
+        if ($this->_qsession->sid === null) {
             $this->_qsession->open();
-            $sid = $this->_qsession->sid;
         }
-        if ($sid === null || $sid === "") {
+        return $this->maybe_post_value();
+    }
+
+    /** @return string */
+    function maybe_post_value() {
+        $sid = $this->_qsession->sid ?? "";
+        if ($sid !== "") {
+            return urlencode(substr($sid, strlen($sid) > 16 ? 8 : 0, 12));
+        } else {
             return ".empty";
         }
-        return urlencode(substr($sid, strlen($sid) > 16 ? 8 : 0, 12));
+    }
+
+
+    /** @return array<string,string|list> */
+    function debug_json() {
+        $a = [];
+        foreach ($this->_v as $k => $v) {
+            if ($v === "__array__" && ($av = $this->_a[$k] ?? null) !== null) {
+                if (count($av) > 20) {
+                    $av = array_slice($av, 0, 20);
+                    $av[] = "...";
+                }
+                $a[$k] = $av;
+            } else if ($v !== null) {
+                if (strlen($v) > 120) {
+                    $v = substr($v, 0, 117) . "...";
+                }
+                $a[$k] = $v;
+            }
+        }
+        foreach ($this->_files as $k => $v) {
+            $fv = ["name" => $v->name, "type" => $v->type, "size" => $v->size];
+            if ($v->error) {
+                $fv["error"] = $v->error;
+            }
+            $a[$k] = $v;
+        }
+        return $a;
     }
 }
 
@@ -769,7 +799,7 @@ class QrequestFile {
     public $name;
     /** @var string */
     public $type;
-    /** @var int */
+    /** @var ?int */
     public $size;
     /** @var ?string */
     public $tmp_name;
@@ -778,27 +808,45 @@ class QrequestFile {
     /** @var int */
     public $error;
 
-    /** @param array{name?:string,type?:string,size?:int,tmp_name?:?string,content?:?string,error?:int} $a */
-    function __construct($a) {
-        $this->name = $a["name"] ?? "";
-        $this->type = $a["type"] ?? "application/octet-stream";
-        $this->size = $a["size"] ?? 0;
-        $this->tmp_name = $a["tmp_name"] ?? null;
-        $this->content = $a["content"] ?? null;
-        $this->error = $a["error"] ?? 0;
+    /** @param array{name?:string,type?:string,size?:?int,tmp_name?:?string,content?:?string,error?:int} $finfo
+     * @return QrequestFile */
+    static function make_finfo($finfo) {
+        $qf = new QrequestFile;
+        $qf->name = $finfo["name"] ?? "";
+        $qf->type = $finfo["type"] ?? "application/octet-stream";
+        $qf->size = $finfo["size"] ?? null;
+        $qf->tmp_name = $finfo["tmp_name"] ?? null;
+        $qf->content = $finfo["content"] ?? null;
+        $qf->error = $finfo["error"] ?? 0;
+        return $qf;
     }
 
-    /** @return array{name:string,type:string,size:int,tmp_name?:string,content?:string,error:int}
-     * @deprecated */
-    function as_array() {
-        $a = ["name" => $this->name, "type" => $this->type, "size" => $this->size];
-        if ($this->tmp_name !== null) {
-            $a["tmp_name"] = $this->tmp_name;
-        }
+    /** @param string $content
+     * @param ?string $filename
+     * @param ?string $mimetype
+     * @return QrequestFile */
+    static function make_string($content, $filename = null, $mimetype = null) {
+        $qf = new QrequestFile;
+        $qf->name = $filename ?? "__content__";
+        $qf->type = $mimetype ?? "application/octet-stream";
+        $qf->size = strlen($content);
+        $qf->tmp_name = null;
+        $qf->content = $content;
+        $qf->error = 0;
+        return $qf;
+    }
+
+    /** @param int $offset
+     * @param ?int $maxlen
+     * @return string|false */
+    function content($offset = 0, $maxlen = null) {
         if ($this->content !== null) {
-            $a["content"] = $this->content;
+            $data = substr($this->content, $offset, $maxlen ?? PHP_INT_MAX);
+        } else if ($maxlen === null) {
+            $data = @file_get_contents($this->tmp_name, false, null, $offset);
+        } else {
+            $data = @file_get_contents($this->tmp_name, false, null, $offset, $maxlen);
         }
-        $a["error"] = $this->error;
-        return $a;
+        return $data;
     }
 }

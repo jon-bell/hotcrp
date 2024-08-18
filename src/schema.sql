@@ -27,13 +27,16 @@ CREATE TABLE `Capability` (
   `capabilityType` int(11) NOT NULL,
   `contactId` int(11) NOT NULL,
   `paperId` int(11) NOT NULL,
-  `otherId` int(11) NOT NULL DEFAULT 0,
+  `reviewId` int(11) NOT NULL DEFAULT 0,
   `timeCreated` bigint(11) NOT NULL,
   `timeUsed` bigint(11) NOT NULL,
   `timeInvalid` bigint(11) NOT NULL,
   `timeExpires` bigint(11) NOT NULL,
   `salt` varbinary(255) NOT NULL,
-  `data` varbinary(8192) DEFAULT NULL,
+  `inputData` varbinary(16384) DEFAULT NULL,
+  `data` varbinary(16384) DEFAULT NULL,
+  `outputData` longblob DEFAULT NULL,
+  `lookupKey` varbinary(255) DEFAULT NULL,
   PRIMARY KEY (`salt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -46,15 +49,15 @@ CREATE TABLE `Capability` (
 DROP TABLE IF EXISTS `ContactCounter`;
 CREATE TABLE `ContactCounter` (
   `contactId` int(11) NOT NULL,
-  `apiCount` bigint(11) NOT NULL DEFAULT '0',
-  `apiLimit` bigint(11) NOT NULL DEFAULT '0',
-  `apiRefreshMtime` bigint(11) NOT NULL DEFAULT '0',
-  `apiRefreshWindow` int(11) NOT NULL DEFAULT '0',
-  `apiRefreshAmount` int(11) NOT NULL DEFAULT '0',
-  `apiLimit2` bigint(11) NOT NULL DEFAULT '0',
-  `apiRefreshMtime2` bigint(11) NOT NULL DEFAULT '0',
-  `apiRefreshWindow2` int(11) NOT NULL DEFAULT '0',
-  `apiRefreshAmount2` int(11) NOT NULL DEFAULT '0',
+  `apiCount` bigint(11) NOT NULL DEFAULT 0,
+  `apiLimit` bigint(11) NOT NULL DEFAULT 0,
+  `apiRefreshMtime` bigint(11) NOT NULL DEFAULT 0,
+  `apiRefreshWindow` int(11) NOT NULL DEFAULT 0,
+  `apiRefreshAmount` int(11) NOT NULL DEFAULT 0,
+  `apiLimit2` bigint(11) NOT NULL DEFAULT 0,
+  `apiRefreshMtime2` bigint(11) NOT NULL DEFAULT 0,
+  `apiRefreshWindow2` int(11) NOT NULL DEFAULT 0,
+  `apiRefreshAmount2` int(11) NOT NULL DEFAULT 0,
   PRIMARY KEY (`contactId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -67,12 +70,16 @@ CREATE TABLE `ContactCounter` (
 DROP TABLE IF EXISTS `ContactInfo`;
 CREATE TABLE `ContactInfo` (
   `contactId` int(11) NOT NULL AUTO_INCREMENT,
+  `email` varchar(120) NOT NULL,
   `firstName` varbinary(120) NOT NULL DEFAULT '',
   `lastName` varbinary(120) NOT NULL DEFAULT '',
   `unaccentedName` varbinary(2048) NOT NULL DEFAULT '',
-  `email` varchar(120) NOT NULL,
-  `preferredEmail` varchar(120) DEFAULT NULL,
   `affiliation` varbinary(2048) NOT NULL DEFAULT '',
+  `roles` tinyint(1) NOT NULL DEFAULT 0,
+  `disabled` tinyint(1) NOT NULL DEFAULT 0,
+  `primaryContactId` int(11) NOT NULL DEFAULT 0,
+  `contactTags` varbinary(4096) DEFAULT NULL,
+  `cflags` int(11) NOT NULL DEFAULT 0,
   `orcid` varbinary(64) DEFAULT NULL,
   `phone` varbinary(64) DEFAULT NULL,
   `country` varbinary(256) DEFAULT NULL,
@@ -80,15 +87,12 @@ CREATE TABLE `ContactInfo` (
   `passwordTime` bigint(11) NOT NULL DEFAULT 0,
   `passwordUseTime` bigint(11) NOT NULL DEFAULT 0,
   `collaborators` varbinary(8192) DEFAULT NULL,
+  `preferredEmail` varchar(120) DEFAULT NULL,
   `updateTime` bigint(11) NOT NULL DEFAULT 0,
   `lastLogin` bigint(11) NOT NULL DEFAULT 0,
   `defaultWatch` int(11) NOT NULL DEFAULT 2,
-  `roles` tinyint(1) NOT NULL DEFAULT 0,
   `cdbRoles` tinyint(1) NOT NULL DEFAULT 0,
-  `disabled` tinyint(1) NOT NULL DEFAULT 0,
-  `contactTags` varbinary(4096) DEFAULT NULL,
   `data` varbinary(32767) DEFAULT NULL,
-  `primaryContactId` int(11) NOT NULL DEFAULT 0,
   PRIMARY KEY (`contactId`),
   UNIQUE KEY `email` (`email`),
   KEY `roles` (`roles`)
@@ -251,9 +255,9 @@ CREATE TABLE `Paper` (
   `mimetype` varbinary(80) NOT NULL DEFAULT '',
   `timestamp` bigint(11) NOT NULL DEFAULT 0,
   `pdfFormatStatus` bigint(11) NOT NULL DEFAULT 0,
-  `withdrawReason` varbinary(1024) DEFAULT NULL,
+  `withdrawReason` blob DEFAULT NULL,
   `paperFormat` tinyint(1) DEFAULT NULL,
-  `dataOverflow` longblob,
+  `dataOverflow` longblob DEFAULT NULL,
   PRIMARY KEY (`paperId`),
   KEY `timeSubmitted` (`timeSubmitted`),
   KEY `leadContactId` (`leadContactId`),
@@ -317,7 +321,7 @@ CREATE TABLE `PaperOption` (
   `optionId` int(11) NOT NULL,
   `value` bigint(11) NOT NULL DEFAULT 0,
   `data` varbinary(32767) DEFAULT NULL,
-  `dataOverflow` longblob,
+  `dataOverflow` longblob DEFAULT NULL,
   PRIMARY KEY (`paperId`,`optionId`,`value`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -332,20 +336,21 @@ CREATE TABLE `PaperReview` (
   `paperId` int(11) NOT NULL,
   `reviewId` int(11) NOT NULL AUTO_INCREMENT,
   `contactId` int(11) NOT NULL,
+  `reviewType` tinyint(1) NOT NULL,
   `requestedBy` int(11) NOT NULL DEFAULT 0,
   `reviewToken` int(11) NOT NULL DEFAULT 0,
   `reviewRound` int(1) NOT NULL DEFAULT 0,
   `reviewOrdinal` int(1) NOT NULL DEFAULT 0,
-  `reviewType` tinyint(1) NOT NULL DEFAULT 0,
-  `reviewBlind` tinyint(1) NOT NULL DEFAULT 1,
-  `reviewTime` bigint(1) NOT NULL DEFAULT 0,
+  `reviewBlind` tinyint(1) NOT NULL,
+  `reviewTime` bigint(11) NOT NULL DEFAULT 0,
   `reviewModified` bigint(1) NOT NULL DEFAULT 0,
   `reviewSubmitted` bigint(1) DEFAULT NULL,
-  `reviewAuthorSeen` bigint(1) DEFAULT NULL,
+  `reviewAuthorSeen` bigint(1) NOT NULL DEFAULT 0,
   `timeDisplayed` bigint(11) NOT NULL DEFAULT 0,
   `timeApprovalRequested` bigint(11) NOT NULL DEFAULT 0,
   `reviewNeedsSubmit` tinyint(1) NOT NULL DEFAULT 1,
   `reviewViewScore` tinyint(2) NOT NULL DEFAULT -3,
+  `rflags` int(11) NOT NULL,
 
   `timeRequested` bigint(11) NOT NULL DEFAULT 0,
   `timeRequestNotified` bigint(11) NOT NULL DEFAULT 0,
@@ -367,7 +372,7 @@ CREATE TABLE `PaperReview` (
   `s10` smallint(4) NOT NULL DEFAULT 0,
   `s11` smallint(4) NOT NULL DEFAULT 0,
 
-  `tfields` longblob,
+  `tfields` longblob DEFAULT NULL,
   `sfields` varbinary(2048) DEFAULT NULL,
   `data` varbinary(8192) DEFAULT NULL,
 
@@ -405,6 +410,7 @@ CREATE TABLE `PaperReviewHistory` (
   `reviewNotified` bigint(1) DEFAULT NULL,
   `reviewAuthorNotified` bigint(11) NOT NULL,
   `reviewEditVersion` int(1) NOT NULL,
+  `rflags` int(11) NOT NULL,
   `revdelta` longblob DEFAULT NULL,
 
   PRIMARY KEY (`paperId`,`reviewId`,`reviewTime`)
@@ -463,7 +469,7 @@ CREATE TABLE `PaperStorage` (
   `paperStorageId` int(11) NOT NULL AUTO_INCREMENT,
   `timestamp` bigint(11) NOT NULL,
   `mimetype` varbinary(80) NOT NULL DEFAULT '',
-  `paper` longblob,
+  `paper` longblob DEFAULT NULL,
   `compression` tinyint(1) NOT NULL DEFAULT 0,
   `sha1` varbinary(64) NOT NULL DEFAULT '',
   `crc32` binary(4) DEFAULT NULL,
@@ -474,6 +480,9 @@ CREATE TABLE `PaperStorage` (
   `filterType` int(3) DEFAULT NULL,
   `originalStorageId` int(11) DEFAULT NULL,
   `inactive` tinyint(1) NOT NULL DEFAULT 0,
+  `npages` int(3) NOT NULL DEFAULT -1,
+  `width` int(8) NOT NULL DEFAULT -1,
+  `height` int(8) NOT NULL DEFAULT -1,
   PRIMARY KEY (`paperId`,`paperStorageId`),
   UNIQUE KEY `paperStorageId` (`paperStorageId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -616,17 +625,18 @@ CREATE TABLE `TopicInterest` (
 
 
 -- Initial settings
+-- (each setting must be on its own line for createdb.php/createdb.sh)
 insert into Settings (name, value, data) values
-  ('allowPaperOption', 275, null),   -- schema version
+  ('allowPaperOption', 299, null),   -- schema version
   ('setupPhase', 1, null),           -- initial user is chair
   ('no_papersub', 1, null),          -- no submissions yet
   ('sub_pcconf', 1, null),           -- collect PC conflicts, not collaborators
   ('tag_chair', 1, 'accept pcpaper reject'),  -- default read-only tags
   ('pcrev_any', 1, null),            -- PC members can review any paper
-  ('extrev_seerev', 1, null),        -- external reviewers can see reviews
-  ('extrev_seerevid', 1, null),      -- external reviewers can see review identities
+  ('viewrevid', 1, null),            -- PC members can see anonymous reviewer IDs
   ('extrev_chairreq', 2, null),      -- administrators must approve potentially-conflicted reviewers
-  ('pcrev_soft', 0, null);           -- soft review deadline is explicit 0
+  ('pcrev_soft', 0, null)            -- soft review deadline is explicit 0
+  ;
 
 -- matches DocumentInfo::make_empty()
 insert ignore into PaperStorage set

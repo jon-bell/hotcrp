@@ -1,6 +1,6 @@
 <?php
 // search/st_option.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 abstract class Option_SearchTerm extends SearchTerm {
     /** @var Contact */
@@ -18,6 +18,14 @@ abstract class Option_SearchTerm extends SearchTerm {
     /** @return PaperOption */
     function option() {
         return $this->option;
+    }
+
+    function paper_requirements(&$options) {
+        if ($this->option->id === PaperOption::TOPICSID) {
+            $options["topics"] = true;
+        } else {
+            $options["options"] = true;
+        }
     }
 
     function sqlexpr(SearchQueryInfo $sqi) {

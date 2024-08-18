@@ -1,6 +1,6 @@
 <?php
-// api/api_review.php -- HotCRP paper-related API calls
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// api/api_review.php -- HotCRP review-related API calls
+// Copyright (c) 2008-2024 Eddie Kohler; see LICENSE.
 
 class Review_API {
     static function review(Contact $user, Qrequest $qreq, PaperInfo $prow) {
@@ -11,35 +11,59 @@ class Review_API {
         if (isset($qreq->r)) {
             $rrow = $prow->full_review_by_ordinal_id($qreq->r);
             if (!$rrow && $prow->parse_ordinal_id($qreq->r) === false) {
-                return JsonResult::make_error(400, "<0>Bad request");
+                return JsonResult::make_parameter_error("r");
             }
             $rrows = $rrow ? [$rrow] : [];
-        } else if (isset($qreq->u)) {
             $need_id = true;
-            $u = APIHelpers::parse_reviewer_for($qreq->u, $user, $prow);
+        } else if (isset($qreq->u)) {
+            $u = APIHelpers::parse_user($qreq->u, $user, "u");
             $rrows = $prow->full_reviews_by_user($u);
-            if (!$rrows
-                && $user->contactId !== $u->contactId
-                && !$user->can_view_review_identity($prow, null)) {
-                return JsonResult::make_permission_error();
-            }
+            $need_id = $user->contactId !== $u->contactId;
         } else {
             $prow->ensure_full_reviews();
             $rrows = $prow->reviews_as_display();
         }
         $vrrows = [];
+        $pex = new PaperExport($user);
         $rf = $user->conf->review_form();
         foreach ($rrows as $rrow) {
             if ($user->can_view_review($prow, $rrow)
                 && (!$need_id || $user->can_view_review_identity($prow, $rrow))) {
-                $vrrows[] = $rf->unparse_review_json($user, $prow, $rrow);
+                $vrrows[] = $pex->review_json($prow, $rrow);
             }
         }
-        if (!$vrrows && $rrows) {
-            return JsonResult::make_permission_error();
-        } else {
+        if ($vrrows || (!$rrows && !$need_id)) {
             return new JsonResult(["ok" => true, "reviews" => $vrrows]);
+        } else {
+            return JsonResult::make_permission_error();
         }
+    }
+
+    static function reviewhistory(Contact $user, Qrequest $qreq, PaperInfo $prow) {
+        if (!$user->can_view_review($prow, null)) {
+            return JsonResult::make_permission_error();
+        }
+        if (!isset($qreq->r)
+            || !($rrow = $prow->full_review_by_ordinal_id($qreq->r))) {
+            return JsonResult::make_parameter_error("r");
+        }
+        if (!$user->is_my_review($rrow)
+            && !$user->can_administer($prow)) {
+            return JsonResult::make_permission_error();
+        }
+        $pex = new PaperExport($user);
+        $pex->set_include_permissions(false);
+        $pex->set_include_ratings(false);
+        $vs = [$pex->review_json($prow, $rrow)];
+        $history = $rrow->history();
+        for ($i = count($history) - 1; $i >= 0; --$i) {
+            if ($history[$i] instanceof ReviewInfo) {
+                $vs[] = $pex->review_json($prow, $history[$i]);
+            } else {
+                $vs[] = $pex->review_history_json($prow, $rrow, $history[$i]);
+            }
+        }
+        return new JsonResult(["ok" => true, "versions" => $vs]);
     }
 
     static function reviewrating(Contact $user, Qrequest $qreq, PaperInfo $prow) {
@@ -92,15 +116,14 @@ class Review_API {
             return JsonResult::make_permission_error();
         } else if (!$rrow) {
             return JsonResult::make_error(404, "<0>Review not found");
-        } else {
-            $rname = trim((string) $qreq->round);
-            $round = $user->conf->sanitize_round_name($rname);
-            if ($round === false) {
-                return ["ok" => false, "error" => Conf::round_name_error($rname)];
-            }
-            $rnum = (int) $user->conf->round_number($round, true);
-            $user->conf->qe("update PaperReview set reviewRound=? where paperId=? and reviewId=?", $rnum, $prow->paperId, $rrow->reviewId);
-            return ["ok" => true];
         }
+        $rname_in = trim((string) $qreq->round);
+        if (($rname = $user->conf->sanitize_round_name($rname_in)) === false) {
+            return JsonResult::make_error(400, "<0>" . Conf::round_name_error($rname_in));
+        } else if (($rnum = $user->conf->round_number($rname)) === null) {
+            return JsonResult::make_error(400, "<0>Review round not found");
+        }
+        $user->conf->qe("update PaperReview set reviewRound=? where paperId=? and reviewId=?", $rnum, $prow->paperId, $rrow->reviewId);
+        return ["ok" => true];
     }
 }

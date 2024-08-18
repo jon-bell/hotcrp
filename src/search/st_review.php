@@ -1,6 +1,6 @@
 <?php
 // search/st_review.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Review_SearchTerm extends SearchTerm {
     /** @var Contact */
@@ -31,7 +31,8 @@ class Review_SearchTerm extends SearchTerm {
             "parse_function" => "Review_SearchTerm::parse",
             "rematch" => [$t, self::$recompleteness_map[$c] ?? $c],
             "reblank" => $c === "" && $t === "",
-            "has" => ">0"
+            "has" => ">0",
+            "needs_relation" => true
         ];
     }
 
@@ -173,7 +174,8 @@ class Review_SearchTerm extends SearchTerm {
                 "name" => $keyword,
                 "parse_function" => "Review_SearchTerm::parse_review_field",
                 "review_field" => $f[0],
-                "has" => "any"
+                "has" => "any",
+                "needs_relation" => true
             ];
         } else {
             return null;
@@ -212,6 +214,11 @@ class Review_SearchTerm extends SearchTerm {
         if (str_starts_with($word, ":")) {
             $word = substr($word, 1);
         }
+        if ($word === "none") {
+            // `FIELD:none` is the opposite of `FIELD:any`; implement with negation
+            $rsm->apply_field(new Present_ReviewFieldSearch($f, true));
+            return (new Review_SearchTerm($srch->user, $rsm))->negate();
+        }
         $sword->cword = $word;
         if (($rfsrch = ReviewFieldSearch::parse($sword, $f, $rsm, $srch))) {
             $rsm->apply_field($rfsrch);
@@ -219,6 +226,10 @@ class Review_SearchTerm extends SearchTerm {
         } else {
             return new False_SearchTerm;
         }
+    }
+
+    function paper_requirements(&$options) {
+        $options["reviewSignatures"] = true;
     }
 
     function sqlexpr(SearchQueryInfo $sqi) {
@@ -259,8 +270,8 @@ class Review_SearchTerm extends SearchTerm {
     function debug_json() {
         return ["type" => $this->type] + $this->rsm->unparse_json($this->user->conf);
     }
-    function about_reviews() {
-        return $this->rsm->has_count() ? self::ABOUT_MANY : self::ABOUT_SELF;
+    function about() {
+        return $this->rsm->has_count() ? self::ABOUT_REVIEW_SET : self::ABOUT_REVIEW;
     }
 
 
@@ -274,14 +285,15 @@ class Review_SearchTerm extends SearchTerm {
             } else if ($st instanceof False_SearchTerm) {
                 $other = true;
                 return 0;
-            } else if ($st instanceof Or_SearchTerm) {
-                return Review_SearchTerm::round_mask_combine($args, false);
             } else if ($st instanceof And_SearchTerm) {
                 $mx = ~0;
                 foreach ($args as $m) {
                     $mx &= $m ?? ~0;
                 }
                 return $mx;
+            } else if ($st instanceof Or_SearchTerm
+                       || $st instanceof Then_SearchTerm) {
+                return Review_SearchTerm::round_mask_combine($args, false);
             } else if ($st instanceof Review_SearchTerm) {
                 $rsm = $st->review_matcher();
                 if ($rsm->sensitivity() !== ReviewSearchMatcher::HAS_ROUND) {

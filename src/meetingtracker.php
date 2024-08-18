@@ -48,7 +48,9 @@ class MeetingTracker {
     }
 
 
-    /** @param Qrequest $qreq */
+    /** @param Qrequest $qreq
+     * @return never
+     * @throws JsonCompletion */
     static function trackerstatus_api(Contact $user, $qreq = null, $prow = null) {
         $tracker = self::lookup($user->conf);
         json_exit([
@@ -335,7 +337,7 @@ class MeetingTracker {
                     if ($prow->managerContactId == $user->contactId) {
                         $p->is_manager = true;
                     }
-                    if ($prow->has_reviewer($user)) {
+                    if ($prow->has_active_reviewer($user)) {
                         $p->is_reviewer = true;
                     }
                     if ($prow->conflictType > CONFLICT_MAXUNCONFLICTED) {
@@ -406,7 +408,7 @@ class MeetingTracker {
             $dl->tracker_eventid = $tracker->eventid;
         }
         if ($tracker->recent()) {
-            $dl->tracker_recent = true;
+            $dl->tracker_recent = $tracker->update_at;
         }
         if (($tcs = $user->conf->opt("trackerCometSite"))) {
             $dl->tracker_site = $tcs;
@@ -694,7 +696,7 @@ class MeetingTracker_ConfigSet implements JsonSerializable {
     function update($new_eventid) {
         $new_data = json_encode_db($this);
         if ($this->_was_empty) {
-            $result = $this->conf->qe("insert ignore into Settings set name=?, value=?, data=?",
+            $result = $this->conf->qe("insert into Settings set name=?, value=?, data=? on duplicate key update value=value",
                     self::SNAME, $new_eventid, $new_data);
         } else if ($new_eventid !== $this->eventid) {
             $result = $this->conf->qe("update Settings set value=?, data=? where name=? and value=?",

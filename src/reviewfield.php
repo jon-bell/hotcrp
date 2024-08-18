@@ -1,6 +1,6 @@
 <?php
 // reviewfield.php -- HotCRP helper class for producing review forms and tables
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 // JSON schema for settings["review_form"]:
 // [{"id":FIELDID,"name":NAME,"description":DESCRIPTION,"order":ORDER,
@@ -338,6 +338,11 @@ abstract class ReviewField implements JsonSerializable {
     }
 
 
+    /** @return bool */
+    function always_exists() {
+        return $this->exists_if === null && $this->round_mask === 0;
+    }
+
     /** @return ?string */
     function exists_condition() {
         if ($this->exists_if !== null) {
@@ -400,29 +405,23 @@ abstract class ReviewField implements JsonSerializable {
      * @return bool */
     abstract function value_present($fval);
 
-    /** @param ?int|?string $fval
-     * @return ?int|?string */
-    function value_clean_storage($fval) {
-        return $fval;
-    }
-
     /** @param int|float|string $fval
      * @return string */
     abstract function unparse_value($fval);
-
-    /** @deprecated */
-    function unparse($fval) {
-        return $this->unparse_value($fval);
-    }
 
     /** @param ?int|?float|?string $fval
      * @return mixed */
     abstract function unparse_json($fval);
 
-    /** @param int|float|string $fval
-     * @param ?string $real_format
+    /** @param int|float $fval
+     * @param ?string $format
      * @return string */
-    function unparse_span_html($fval, $real_format = null) {
+    abstract function unparse_computed($fval, $format = null);
+
+    /** @param int|float|string $fval
+     * @param ?string $format
+     * @return string */
+    function unparse_span_html($fval, $format = null) {
         return "";
     }
 
@@ -430,13 +429,6 @@ abstract class ReviewField implements JsonSerializable {
      * @return string */
     function unparse_search($fval) {
         return "";
-    }
-
-    const VALUE_NONE = 0;
-    const VALUE_SC = 1;
-    /** @deprecated */
-    function value_unparse($fval, $flags = 0, $real_format = null) {
-        return $flags & self::VALUE_SC ? $this->unparse_span_html($fval, $real_format) : $this->unparse_value($fval);
     }
 
     /** @param Qrequest $qreq
@@ -456,12 +448,12 @@ abstract class ReviewField implements JsonSerializable {
 
     /** @param ?string $id
      * @param ?string $label_for
-     * @param ?ReviewValues $rvalues
+     * @param ReviewValues $rvalues
      * @param ?array{name_html?:string,label_class?:string} $args */
     protected function print_web_edit_open($id, $label_for, $rvalues, $args = null) {
         echo '<div class="rf rfe" data-rf="', $this->uid(),
             '"><h3 class="',
-            $rvalues ? $rvalues->control_class($this->short_id, "rfehead") : "rfehead";
+            $rvalues->control_class($this->short_id, "rfehead");
         if ($id !== null) {
             echo '" id="', $id;
         }
@@ -476,10 +468,7 @@ abstract class ReviewField implements JsonSerializable {
         if (($rd = self::visibility_description($this->view_score)) !== "") {
             echo '<div class="field-visibility">(', $rd, ')</div>';
         }
-        echo '</h3>';
-        if ($rvalues) {
-            echo $rvalues->feedback_html_at($this->short_id);
-        }
+        echo '</h3>', $rvalues->feedback_html_at($this->short_id);
         if ($this->description) {
             echo '<div class="field-d">', $this->description, "</div>";
         }
@@ -487,7 +476,7 @@ abstract class ReviewField implements JsonSerializable {
 
     /** @param int|string $fval
      * @param ?string $reqstr
-     * @param ?ReviewValues $rvalues
+     * @param ReviewValues $rvalues
      * @param array{format:?TextFormat} $args */
     abstract function print_web_edit($fval, $reqstr, $rvalues, $args);
 
@@ -569,7 +558,8 @@ abstract class Discrete_ReviewField extends ReviewField {
         "viridisr" => [1, 9, "viridis"], "viridis" => [0, 9, "viridisr"],
         "orbu" => [0, 9, "buor"], "buor" => [1, 9, "orbu"],
         "turbo" => [0, 9, "turbor"], "turbor" => [1, 9, "turbo"],
-        "catx" => [2, 10, null], "none" => [2, 1, null]
+        "observablex" => [2, 10, null], "catx" => [2, 10, null],
+        "none" => [2, 1, null]
     ];
 
     /** @var array<string,string>
@@ -647,11 +637,6 @@ abstract class Discrete_ReviewField extends ReviewField {
         return $rfs;
     }
 
-    /** @param int|float $fval
-     * @param ?string $real_format
-     * @return string */
-    abstract function unparse_computed($fval, $real_format = null);
-
     const GRAPH_STACK = 1;
     const GRAPH_PROPORTIONS = 2;
     const GRAPH_STACK_REQUIRED = 3;
@@ -691,7 +676,7 @@ abstract class DiscreteValues_ReviewField extends Discrete_ReviewField {
         if (isset($j->symbols) && !isset($j->values)) {
             $this->values = array_fill(0, count($j->symbols), "");
         } else {
-            $this->values = $j->values ?? $j->options ?? [];
+            $this->values = $j->values ?? $j->options /* XXX */ ?? [];
         }
         $nvalues = count($this->values);
         if (isset($j->symbols) && count($j->symbols) === $nvalues) {
@@ -925,7 +910,7 @@ abstract class DiscreteValues_ReviewField extends Discrete_ReviewField {
     static function check_none($s) {
         if ($s === "" || $s[0] === "(" || $s === "undefined") {
             return null;
-        } else if (in_array(strtolower($s), ["none", "n/a", "0", "-", "–", "—", "no entry"])
+        } else if (in_array(strtolower($s), ["none", "n/a", "0", "-", "–", "—", "no entry", "empty"])
                    || substr_compare($s, "none ", 0, 5, true) === 0) {
             return 0;
         } else {
@@ -980,15 +965,15 @@ class Score_ReviewField extends DiscreteValues_ReviewField {
     }
 
     /** @param int|float $fval
-     * @param ?string $real_format
+     * @param ?string $format
      * @return string */
-    function unparse_computed($fval, $real_format = null) {
+    function unparse_computed($fval, $format = null) {
         if ($fval === null) {
             return "";
         }
         $numeric = ($this->flags & self::FLAG_NUMERIC) !== 0;
-        if ($real_format !== null && $numeric) {
-            return sprintf($real_format, $fval);
+        if ($format !== null && $numeric) {
+            return sprintf($format, $fval);
         }
         if ($fval <= 0.8) {
             return "–";
@@ -1111,7 +1096,7 @@ class Score_ReviewField extends DiscreteValues_ReviewField {
                 echo '</strong>';
             }
         } else {
-            echo 'None of the above';
+            echo 'No entry';
         }
         echo '</label>';
     }
@@ -1194,7 +1179,7 @@ class Score_ReviewField extends DiscreteValues_ReviewField {
             }
         }
         if (!$this->required) {
-            $t[] = "==-==    None of the above\n==-== Enter your choice:\n";
+            $t[] = "==-==    No entry\n==-== Enter your choice:\n";
         } else if (($this->flags & self::FLAG_ALPHA) !== 0) {
             $t[] = "==-== Enter the letter of your choice:\n";
         } else if (($this->flags & self::FLAG_NUMERIC) !== 0) {
@@ -1213,7 +1198,7 @@ class Score_ReviewField extends DiscreteValues_ReviewField {
         } else if ($this->required || ($fval ?? 0) === 0) {
             $t[] = "(Your choice here)\n";
         } else {
-            $t[] = "None of the above\n";
+            $t[] = "No entry\n";
         }
     }
 
@@ -1230,6 +1215,12 @@ class Score_ReviewField extends DiscreteValues_ReviewField {
             "<0>at least one completed review has {title} {value}",
             $varg
         );
+        if (!$this->required) {
+            $ex[] = new SearchExample(
+                $this, "{$kw}:empty",
+                "<0>at least one completed review has an empty {title} field"
+            );
+        }
         if (count($this->values) > 2
             && ($this->flags & self::FLAG_NUMERIC) !== 0) {
             $ex[] = new SearchExample(
@@ -1257,12 +1248,6 @@ class Score_ReviewField extends DiscreteValues_ReviewField {
                 ...$fmtargs
             ))->hint("<0>This means all scores between {v1} and {v2}, with at least one {v1} and at least one {v2}.")
               ->primary_only(true);
-        }
-        if (!$this->required) {
-            $ex[] = new SearchExample(
-                $this, "{$kw}:none",
-                "<0>at least one completed review has an empty {value} field"
-            );
         }
 
         // counts
@@ -1343,14 +1328,6 @@ class Text_ReviewField extends ReviewField {
         return $fval !== null && $fval !== "";
     }
 
-    function value_clean_storage($fval) {
-        if ($fval !== null && $fval !== "" && !ctype_space($fval)) {
-            return $fval;
-        } else {
-            return null;
-        }
-    }
-
     /** @return bool */
     function include_word_count() {
         return $this->order && $this->view_score >= VIEWSCORE_AUTHORDEC;
@@ -1364,12 +1341,13 @@ class Text_ReviewField extends ReviewField {
         return $fval;
     }
 
+    function unparse_computed($fval, $format = null) {
+        return (string) $fval;
+    }
+
     function parse($text) {
-        $text = rtrim($text);
-        if ($text === "") {
-            return null;
-        }
-        return $text . "\n";
+        $text = rtrim(cleannl(convert_to_utf8($text)));
+        return $text === "" ? null : "{$text}\n";
     }
 
     function parse_json($j) {
@@ -1425,7 +1403,11 @@ class Text_ReviewField extends ReviewField {
                 $this, "{$kw}:{text}",
                 "<0>at least one completed review has “{text}” in the {title} field",
                 new FmtArg("text", "finger")
-            ))->primary_only(true)
+            ))->primary_only(true),
+            new SearchExample(
+                $this, "{$kw}:empty",
+                "<0>at least one completed review has an empty {title} field"
+            )
         ];
     }
 

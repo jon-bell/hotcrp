@@ -1,11 +1,42 @@
 // settings.js -- HotCRP JavaScript library for settings
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 "use strict";
 
 (function () {
+/* global hotcrp */
+const $$ = hotcrp.$$,
+    $e = hotcrp.$e,
+    $popup = hotcrp.$popup,
+    addClass = hotcrp.classes.add,
+    hasClass = hotcrp.classes.has,
+    removeClass = hotcrp.classes.remove,
+    toggleClass = hotcrp.classes.toggle,
+    check_form_differs = hotcrp.check_form_differs,
+    demand_load = hotcrp.demand_load,
+    escape_html = hotcrp.text.escape_html,
+    event_key = hotcrp.event_key,
+    feedback = hotcrp.feedback,
+    focus_at = hotcrp.focus_at,
+    fold = hotcrp.fold,
+    foldup = hotcrp.foldup,
+    form_differs = hotcrp.form_differs,
+    handle_ui = hotcrp.handle_ui,
+    hoturl = hotcrp.hoturl,
+    hidden_input = hotcrp.hidden_input,
+    input_default_value = hotcrp.input_default_value,
+    log_jserror = hotcrp.log_jserror,
+    make_bubble = hotcrp.make_bubble,
+    plural = hotcrp.text.plural,
+    render_text = hotcrp.render_text,
+    sprintf = hotcrp.text.sprintf,
+    text_eq = hotcrp.text.text_eq;
 
-handle_ui.on("hashjump.js-hash", function (hashc, focus) {
+function hoturl_html(page, options) {
+    return escape_html(hoturl(page, options));
+}
+
+handle_ui.on("hashjump.js-hash", function (hashc) {
     var e, fx, fp;
     if (hashc.length === 1
         && (e = document.getElementById(decodeURIComponent(hashc[0])))
@@ -22,12 +53,6 @@ handle_ui.on("js-settings-radioitem-click", function () {
         && (re = re.firstElementChild)
         && re.tagName === "INPUT")
         re.click();
-});
-
-handle_ui.on("js-settings-sub-nopapers", function () {
-    var v = $(this).val();
-    hotcrp.fold("pdfupload", v == 1, 2);
-    hotcrp.fold("pdfupload", v != 0, 3);
 });
 
 $(function () { $(".js-settings-sub-nopapers").trigger("change"); });
@@ -93,15 +118,20 @@ function settings_delete(elt, message) {
 }
 
 function settings_field_unfold(evt) {
-    if (evt.which.open && evt.which.n === 2) {
-        var ch = this.parentElement.firstChild;
+    if (evt.which.n !== 2) {
+        return;
+    }
+    if (evt.which.open) {
+        let ch = this.parentElement.firstChild;
         for (; ch; ch = ch.nextSibling) {
             if (ch !== this && hasClass(ch, "fold2o") && !form_differs(ch))
-                fold(ch, true, 2);
+                foldup.call(ch, null, {n: 2, open: false});
         }
         $(this).find("textarea").css("height", "auto").autogrow();
         $(this).find("input[type=text]").autogrow();
-        $(this).scrollIntoView();
+        if (!evt.which.nofocus) {
+            $(this).scrollIntoView();
+        }
     }
 }
 
@@ -113,14 +143,17 @@ function settings_disable_children(e) {
         else if (this.type !== "select")
             this.readonly = true;
         removeClass(this, "ui");
+        this.removeAttribute("draggable");
+        this.tabIndex = -1;
     });
+    $(e).find(".draggable").removeClass("draggable");
 }
 
 function settings_field_order(parentid) {
-    var i = 0, curorder, defaultorder, orde, n,
+    var i = 0, curorder, defaultorder, orde, n, e,
         form = document.getElementById("f-settings"),
         c = document.getElementById(parentid),
-        moveup = null, movedown = null;
+        movedown = null;
     for (n = c.firstChild; n; n = n.nextSibling) {
         orde = form.elements[n.id + "/order"];
         if (hasClass(n, "deleted")) {
@@ -128,10 +161,13 @@ function settings_field_order(parentid) {
             continue;
         }
         ++i;
-        moveup = n.querySelector(".moveup");
-        moveup.disabled = movedown === null;
-        movedown = n.querySelector(".movedown");
-        movedown.disabled = false;
+        if ((e = n.querySelector(".move-up"))) {
+            e.disabled = movedown === null;
+        }
+        if ((e = n.querySelector(".move-down"))) {
+            e.disabled = false;
+            movedown = e;
+        }
         curorder = +orde.value;
         defaultorder = +input_default_value(orde);
         if (defaultorder > 0 && defaultorder < curorder) {
@@ -143,7 +179,7 @@ function settings_field_order(parentid) {
         orde.value = i = curorder;
     }
     movedown && (movedown.disabled = true);
-    form_highlight(form);
+    check_form_differs(form);
 }
 
 function field_find(ftypes, name) {
@@ -154,30 +190,33 @@ function field_find(ftypes, name) {
     return null;
 }
 
-function field_instantiate_type(ee, ftypes, ftype) {
+function field_instantiate_type(ee, ftfinder, ftype) {
     const select = ee.querySelector("select");
+    if (!select) {
+        return; // intrinsic field
+    }
     select.replaceChildren();
     if (ftype.convertible_to.length === 1) {
         select.closest(".entry").replaceChildren(ftype.title, hidden_input(select.name, ftype.name, {id: select.id}));
     } else {
         for (const ct of ftype.convertible_to) {
-            select.add(make_option_element(ct, field_find(ftypes, ct).title));
+            select.add(make_option_element(ct, ftfinder(ct).title));
         }
         select.value = ftype.name;
         select.setAttribute("data-default-value", ftype.name);
     }
 }
 
-function field_instantiate(ee, ftypes, tname, instantiators) {
+function field_instantiate(ee, ftfinder, tname, instantiators) {
     if (!tname && ee.id.endsWith("/edit")) {
         tname = ee.closest("form").elements[ee.id.substring(0, ee.id.length - 4) + "type"].value;
     }
-    const ftype = field_find(ftypes, tname);
+    const ftype = ftfinder(tname);
     for (let pe = ee.firstElementChild; pe; ) {
         const npe = pe.nextElementSibling,
             prop = pe.getAttribute("data-property");
         if (prop === "type") {
-            field_instantiate_type(pe, ftypes, ftype);
+            field_instantiate_type(pe, ftfinder, ftype);
         } else if (hasClass(pe, "property-optional")
                    ? (ftype.properties || {})[prop]
                    : (ftype.properties || {})[prop] !== false) {
@@ -197,25 +236,100 @@ function field_instantiate(ee, ftypes, tname, instantiators) {
     }
 }
 
+function grid_select_event(evt) {
+    let selidx = null, curidx, action = 1, columns,
+        e = typeof evt === "number" ? null : evt.target.closest(".grid-option");
+    if (typeof evt === "number") {
+        selidx = evt;
+        action = 1;
+        evt = null;
+    } else if (evt.type === "dblclick") {
+        if (!hasClass(this, "grid-select-autosubmit")
+            || event_key.modcode(evt) !== 0
+            || evt.button !== 0
+            || !e) {
+            return false;
+        }
+        action = 2;
+    } else if (evt.type === "click") {
+        if (event_key.modcode(evt) !== 0
+            || evt.button !== 0
+            || !e) {
+            return false;
+        }
+        selidx = +e.getAttribute("data-index");
+    } else if (evt.type === "keydown") {
+        if (!e) {
+            return false;
+        }
+        var key = event_key(evt), mod = event_key.modcode(evt);
+        selidx = +e.getAttribute("data-index");
+        columns = window.getComputedStyle(this).gridTemplateColumns.split(" ").length;
+        if (key === "ArrowLeft" && !mod) {
+            --selidx;
+        } else if (key === "ArrowRight" && !mod) {
+            ++selidx;
+        } else if (key === "ArrowUp" && !mod) {
+            selidx -= columns;
+        } else if (key === "ArrowDown" && !mod) {
+            selidx += columns;
+        } else if (key === "Home" && (!mod || mod === event_key.CTRL)) {
+            selidx = columns < 3 ? 0 : selidx - selidx % columns;
+            action = 0;
+        } else if (key === "End" && !mod) {
+            selidx = columns < 3 ? this.childNodes.length - 1 : selidx + (selidx + columns - 1) % columns;
+            action = 0;
+        } else if (key === "End" && mod === event_key.CTRL) {
+            selidx = this.childNodes.length - 1;
+            action = 0;
+        } else if (key === " " && !mod) {
+            // action = 1;
+        } else if (key === "Enter" && !mod) {
+            action = hasClass(this, "grid-select-autosubmit") ? 3 : 1;
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    selidx = Math.min(Math.max(selidx, 0), this.childNodes.length - 1);
+    if (this.hasAttribute("data-selected-index")) {
+        curidx = +this.getAttribute("data-selected-index");
+    }
+    if (curidx !== selidx && curidx !== null && (e = this.childNodes[curidx])) {
+        e.setAttribute("aria-selected", "false");
+        removeClass(e, "active");
+    }
+    if ((e = this.childNodes[selidx])) {
+        e.focus();
+        $(e).scrollIntoView();
+        if ((action & 1) !== 0 && selidx !== curidx) {
+            this.setAttribute("data-selected-index", selidx);
+            e.setAttribute("aria-selected", "true");
+            addClass(e, "active");
+            curidx = selidx;
+        }
+    }
+    if ((action & 2) !== 0 && curidx !== null) {
+        $(this.closest("form")).trigger("submit");
+    }
+    evt && evt.preventDefault();
+    return true;
+}
+
 
 // BEGIN SUBMISSION FIELD SETTINGS
 (function () {
-var sftypes;
 
 function sf_order() {
     settings_field_order("settings-sform");
 }
 
-function sf_instantiate(ee) {
-    sftypes = sftypes || JSON.parse($$("settings-sform").getAttribute("data-sf-types"));
-    field_instantiate(ee, sftypes, null, null);
-}
-
 handle_ui.on("js-settings-sf-move", function (evt) {
     var sf = this.closest(".settings-sf");
-    if (hasClass(this, "moveup") && sf.previousSibling) {
+    if (hasClass(this, "move-up") && sf.previousSibling) {
         sf.parentNode.insertBefore(sf, sf.previousSibling);
-    } else if (hasClass(this, "movedown") && sf.nextSibling) {
+    } else if (hasClass(this, "move-down") && sf.nextSibling) {
         sf.parentNode.insertBefore(sf, sf.nextSibling.nextSibling);
     } else if (hasClass(this, "delete")) {
         var msg, x;
@@ -230,69 +344,156 @@ handle_ui.on("js-settings-sf-move", function (evt) {
     sf_order();
 });
 
+demand_load.submission_field_library = demand_load.make(function (resolve) {
+    $.get(hoturl("api/submissionfieldlibrary"), null, resolve);
+});
 
 function add_dialog() {
-    var $d, sel, samps = $$("settings-sf-samples").content.childNodes;
-    function cur_option() {
-        return sel.options[sel.selectedIndex] || sel.options[0];
-    }
-    function render_template() {
-        var opt = cur_option(), sft = $d.find(".settings-sf-template-view")[0];
-        if (hasClass(sft.lastChild, "settings-sf-example"))
-            sft.lastChild.remove();
-        sft.appendChild(samps[opt.value | 0].cloneNode(true));
-        settings_disable_children(sft);
-    }
+    let $pu, grid, samples;
     function submit(evt) {
-        var opt = cur_option(),
-            samp = samps[opt.value | 0],
-            h = $$("settings-sf-new").innerHTML,
-            next = 1, odiv;
+        var selidx = +grid.getAttribute("data-selected-index"),
+            h = samples[selidx].sf_edit_html,
+            next = 1;
         while ($$("sf/" + next + "/name")) {
             ++next;
         }
         h = h.replace(/\/\$/g, "/" + next);
-        odiv = $(h).removeClass("hidden").appendTo("#settings-sform").awaken();
-        $$("sf/" + next + "/type").options[0].value = samp.getAttribute("data-name");
-        sf_instantiate($$("sf/" + next + "/edit"));
+        $(h).removeClass("hidden").appendTo("#settings-sform").awaken();
         $$("sf/" + next + "/name").focus();
         sf_order();
-        $d.close();
+        $pu.close();
         evt.preventDefault();
     }
-    function create() {
-        var hc = popup_skeleton({className: "modal-dialog-w40"}), i;
-        hc.push('<h2>Add field</h2>');
-        hc.push('<p>Choose a template for the new field.</p>');
-        hc.push('<select name="sf_template" class="w-100 want-focus" size="5">', '</select>');
-        for (i = 0; samps[i]; ++i) {
-            hc.push('<option value="'.concat(i, i ? '">' : '" selected>', escape_html(samps[i].getAttribute("data-title")), '</option>'));
+    function create(library) {
+        samples = library.samples;
+        grid = $e("div", {"class": "grid-select grid-select-autosubmit", role: "listbox"});
+        $pu = $popup({className: "modal-dialog-wide"})
+            .append($e("h2", null, "Add submission field"), $e("p", null, "Choose a template for the new field."), grid)
+            .append_actions($e("button", {type: "submit", name: "add", "class": "btn-primary"}, "Add field"),
+                $e("button", {type: "button", name: "cancel"}, "Cancel"))
+            .show();
+        for (let i = 0; i !== samples.length; ++i) {
+            const e = $e("div", "settings-xf-view");
+            e.innerHTML = samples[i].sf_view_html;
+            grid.append($e("fieldset", {"class": "grid-option", "data-index": i, role: "option", tabindex: 0, "aria-selected": "false"},
+                $e("legend", null, samples[i].legend),
+                $e("div", {"class": "settings-xf-viewport", role: "presentation"}, e)));
         }
-        hc.pop();
-        hc.push('<fieldset class="settings-sf-template-view mt-4 modal-demo-fieldset"><legend>Example</legend></fieldset>');
-        hc.push_actions(['<button type="submit" name="add" class="btn-primary">Add field</button>',
-            '<button type="button" name="cancel">Cancel</button>']);
-        $d = hc.show();
-        sel = $d.find("select")[0];
-        render_template();
-        $(sel).on("input", render_template);
-        $d.find("form").on("submit", submit);
+        settings_disable_children(grid);
+        grid_select_event.call(grid, 0);
+        grid.addEventListener("keydown", grid_select_event);
+        grid.addEventListener("click", grid_select_event);
+        grid.addEventListener("dblclick", grid_select_event);
+        $pu.on("submit", submit);
     }
-    create();
+    demand_load.submission_field_library().then(create);
 }
 
 handle_ui.on("js-settings-sf-add", add_dialog);
 
+handle_ui.on("js-settings-sf-checkbox-required", function () {
+    const fl = this.closest(".entry").lastChild,
+        verb = fl.querySelector(".verb");
+    if (hasClass(fl, "feedback-list")) {
+        verb.textContent = this.value == "2" ? "completing" : "registering";
+        toggleClass(fl, "hidden", this.value == 0);
+    }
+});
+
+const sf_field_wizard_info = [
+    { name: "sf_abstract", value: 0, type: "abstract", presence: "all", required: 1 },
+    { name: "sf_abstract", value: 1, type: "abstract", presence: "none" },
+    { name: "sf_abstract", value: 2, type: "abstract", presence: "all", required: 0 },
+    { name: "sf_pdf_submission", value: 0, type: "submission", presence: "all", required: 2 },
+    { name: "sf_pdf_submission", value: 1, type: "submission", presence: "none" },
+    { name: "sf_pdf_submission", value: 2, type: "submission", presence: "all", required: 0 },
+    { name: "sf_pdf_submission", value: 0, type: "final", presence: "phase:final", required: 2, secondary: true },
+    { name: "sf_pdf_submission", value: 1, type: "final", presence: "none", secondary: true },
+    { name: "sf_pdf_submission", value: 2, type: "final", presence: "phase:final", required: 0, secondary: true }
+];
+
+let sf_initializing = false;
+
+function handle_sf_field_wizard_change() {
+    const f = this.form;
+    let changed = false;
+    function mark(e) {
+        if (e.name === "sf_pdf_submission") {
+            fold("pdfupload", e.value == 1, 2);
+            fold("pdfupload", e.value != 0, 3);
+        }
+    }
+    function apply1(type, sfx, value) {
+        let i = 1, e;
+        while ((e = f.elements["sf/" + i + "/id"]) && e.value !== type) {
+            ++i;
+        }
+        if (!e || !(e = f.elements["sf/" + i + "/" + sfx])) {
+            return;
+        }
+        if (value == null) {
+            value = input_default_value(e);
+        }
+        if (e.value != value) {
+            e.value = value;
+            mark(e);
+            foldup.call(e, null, {n: 2, open: true, nofocus: true});
+            changed = true;
+        }
+    }
+    function apply2(wizname, value) {
+        let e = f.elements[wizname];
+        if (e && e.value != value) {
+            e.value = value;
+            mark(e);
+            changed = true;
+        }
+    }
+    if (sf_initializing) {
+        // do not transfer wizard settings on initial load
+    } else if (this.name === "sf_abstract" || this.name === "sf_pdf_submission") {
+        for (let x of sf_field_wizard_info) {
+            if (x.name === this.name && x.value == this.value) {
+                apply1(x.type, "presence", x.presence);
+                apply1(x.type, "required", x.required);
+            }
+        }
+    } else {
+        const m = this.name.match(/^sf\/(\d+)\/(presence|required)/),
+            ide = m && f.elements["sf/" + m[1] + "/id"],
+            prese = m && f.elements["sf/" + m[1] + "/presence"],
+            reqe = m && f.elements["sf/" + m[1] + "/required"];
+        if (ide && prese && reqe) {
+            for (let x of sf_field_wizard_info) {
+                if (x.type === ide.value
+                    && !x.secondary
+                    && x.presence == prese.value
+                    && (x.required == null || x.required == reqe.value)) {
+                    apply2(x.name, x.value);
+                }
+            }
+        }
+    }
+    mark(this);
+    changed && check_form_differs(f);
+}
+
+handle_ui.on("js-settings-sf-wizard", handle_sf_field_wizard_change);
+
 $(document).on("hotcrpsettingssf", ".settings-sf", function () {
-    var view = document.getElementById(this.id + "/view"),
+    const view = document.getElementById(this.id + "/view"),
         edit = document.getElementById(this.id + "/edit");
     settings_disable_children(view);
-    if (edit) {
-        sf_instantiate(edit);
-        if (!form_differs(edit)
-            && !$(edit).find(".is-error, .has-error").length)
-            fold(this, true, 2);
+    if (edit
+        && !form_differs(edit)
+        && !$(edit).find(".is-error, .has-error").length) {
+        fold(this, true, 2);
+    } else {
+        $(edit).awaken();
     }
+    sf_initializing = true;
+    $(edit).find(".uich").trigger("change");
+    sf_initializing = false;
     removeClass(this, "hidden");
     sf_order();
 });
@@ -339,7 +540,7 @@ handle_ui.on("js-settings-automatic-tag-delete", function () {
     var ne = this.form.elements[this.closest(".settings-automatic-tag").id + "/tag"];
     settings_delete(this.closest(".settings-automatic-tag"),
         "This automatic tag will be removed from settings and from <a href=\"".concat(hoturl_html("search", {q: "#" + ne.defaultValue, t: "all"}), '" target="_blank" rel="noopener">any matching submissions</a>.'));
-    form_highlight(this.form);
+    check_form_differs(this.form);
 });
 
 handle_ui.on("js-settings-track-add", function () {
@@ -349,6 +550,12 @@ handle_ui.on("js-settings-track-add", function () {
     $("#track\\/" + (i - 1)).after(trhtml);
     $("#track\\/" + i).awaken();
     this.form.elements["track/".concat(i, "/tag")].focus();
+});
+
+handle_ui.on("js-settings-track-delete", function () {
+    settings_delete(this.closest(".settings-tracks"),
+        "This track will be removed.");
+    check_form_differs(this.form);
 });
 
 handle_ui.on("js-settings-topics-copy", function () {
@@ -420,7 +627,7 @@ handle_ui.on("js-settings-review-round-new", function () {
     $("#settings-review-rounds").append($n);
     $n.find("textarea").css({height: "auto"}).autogrow();
     $n.awaken();
-    form_highlight(this.form);
+    check_form_differs(this.form);
     settings_review_round_selectors(this.form);
 });
 
@@ -433,30 +640,8 @@ handle_ui.on("js-settings-review-round-delete", function () {
     } else {
         settings_delete(div, "This review round will be deleted and <a href=\"".concat(hoturl_html("search", {q: "re:\"" + (ne ? ne.defaultValue : "<invalid>") + "\""}), '" target="_blank" rel="noopener">', plural(n, "review"), '</a> assigned to another round.'));
     }
-    form_highlight(this.form);
+    check_form_differs(this.form);
     settings_review_round_selectors(this.form);
-});
-
-handle_ui.on("js-settings-comment-visibility-anonymous", function () {
-    var ch;
-    if (this.type === "checkbox") {
-        ch = this.checked;
-    } else {
-        ch = this.value !== "" && this.value !== "false" && this.value !== "0";
-    }
-    $(".has-comment-visibility-anonymous").each(function () {
-        if (hasClass(this, "is-identity"))
-            this.textContent = ch ? "reviewer names" : "reviewer names and comments";
-        else if (hasClass(this, "is-contents"))
-            this.textContent = ch ? "review contents and comments" : "review contents";
-        else if (hasClass(this, "is-contents-external"))
-            this.textContent = ch ? "review contents, comments, and eventual decisions" : "review contents and eventual decisions";
-        else if (hasClass(this, "if-anonymous"))
-            toggleClass(this, "hidden", !ch);
-    });
-});
-$(function () {
-    $(".js-settings-comment-visibility-anonymous").change();
 });
 
 
@@ -467,7 +652,7 @@ handle_ui.on("js-settings-submission-round-new", function () {
     $n = $(h.replace(/\/\$/g, "/" + i));
     $("#settings-submission-rounds").append($n);
     $n.awaken();
-    form_highlight(this.form);
+    check_form_differs(this.form);
     this.form.elements["submission/" + i + "/tag"].focus();
 });
 
@@ -482,20 +667,25 @@ handle_ui.on("js-settings-submission-round-delete", function () {
                 $$(div.id + '/delete_message').innerHTML = 'This submission class will be removed. The <a href="'.concat(hoturl_html("search", {q: "sclass:" + ne.defaultValue, t: "all"}), '" target="_blank" rel="noopener">', plural(v.ids.length, "submission"), '</a> associated with this class will remain in the system, and will still have the #', escape_html(ne.defaultValue), ' tag, but will be reassigned to other submission classes.');
         });
     }
-    form_highlight(this.form);
+    check_form_differs(this.form);
 });
 
 
 var review_form_settings = (function () {
 
-var fieldorder = [], samples, rftypes,
+var fieldorder = [], rftypes,
     colors = ["sv", "Red to green", "svr", "Green to red",
               "bupu", "Blue to purple", "pubu", "Purple to blue",
               "rdpk", "Red to pink", "pkrd", "Pink to red",
               "viridisr", "Yellow to purple", "viridis", "Purple to yellow",
               "orbu", "Orange to blue", "buor", "Blue to orange",
               "turbo", "Turbo", "turbor", "Turbo reversed",
-              "catx", "Category10", "none", "None"];
+              "observablex", "Observable10", "catx", "Category10",
+              "none", "None"];
+
+function rffinder(name) {
+    return field_find(rftypes, name);
+}
 
 function unparse_value(fld, idx) {
     if (fld.start && fld.start !== 1) {
@@ -529,19 +719,23 @@ function rf_fill_control(form, name, value, setdefault) {
 }
 
 function rf_color() {
-    var c = this, sv = $(this).val(), i, scheme = make_color_scheme(9, sv, false);
+    var c = this, sv = $(this).val(), i, scheme = hotcrp.make_color_scheme(9, sv, false);
     hasClass(c.parentElement, "select") && (c = c.parentElement);
     while (c && !hasClass(c, "rf-scheme-example")) {
         c = c.nextSibling;
     }
     for (i = 1; i <= scheme.max && c; ++i) {
         if (c.children.length < i)
-            $(c).append('<svg width="0.5em" height="0.75em" viewBox="0 0 1 1"><path d="M0 0h1v1h-1z" fill="currentColor" /></svg>');
+            $(c).append('<svg width="0.75em" height="0.75em" viewBox="0 0 1 1"><path d="M0 0h1v1h-1z" fill="currentColor" /></svg>');
         c.children[i - 1].setAttribute("class", scheme.className(i));
     }
     while (c && i <= c.children.length) {
         c.removeChild(c.lastChild);
     }
+    /*c.append($e("br"), $e("span", {
+        "class": "d-inline-block",
+        "style": "width:" + (0.75 * scheme.max) + "em;height:1em;background:linear-gradient(in oklch to right, " + scheme.color(1) + " 0% " + (50 / scheme.max) + "%, " + scheme.color(scheme.max) + " " + (100 - 50 / scheme.max) + "% 100%)"
+    }));*/
 }
 
 handle_ui.on("change.rf-scheme", rf_color);
@@ -634,67 +828,79 @@ function rf_visibility_text(visibility) {
         return "";
 }
 
-function rf_render_view(fld) {
-    var hc = new HtmlCollector;
+function rf_render_view(fld, example) {
+    var xfv = $e("div", "settings-xf-view"), labele, e, ve, t;
 
-    hc.push('<h3 class="rfehead">', '</h3>');
-    if (fld.type === "checkbox") {
-        hc.push('<label class="revfn checki'.concat(fld.required ? " field-required" : "", '"><span class="checkc"><input type="checkbox" disabled></span>'), '</label>');
-    } else {
-        hc.push('<label class="revfn'.concat(fld.required ? " field-required" : "", '">'), '</label>');
+    // header
+    labele = $e("label", "revfn" + (fld.required ? " field-required" : ""),
+        fld.name || (example ? "Field name" : "<unnamed>"));
+    xfv.append((e = $e("h3", "rfehead", labele)));
+    if ((t = rf_visibility_text(fld.visibility))) {
+        e.append($e("div", "field-visibility", t));
     }
-    hc.push_pop(fld.name_html || "&lt;unnamed&gt;");
-    var t = rf_visibility_text(fld.visibility);
-    if (t)
-        hc.push('<div class="field-visibility">'.concat(t, '</div>'));
-    hc.pop();
 
-    hc.push('<ul class="feedback-list">', '</ul>');
+    // feedback
+    xfv.append((e = $e("ul", "feedback-list")));
     if (fld.exists_if && /^round:[a-zA-Z][-_a-zA-Z0-9]*$/.test(fld.exists_if)) {
-        hc.push('<li class="is-diagnostic format-inline is-warning-note">Present on ' + fld.exists_if.substring(6) + ' reviews</li>');
+        e.append($e("li", "is-diagnostic format-inline is-warning-note", "Present on " + fld.exists_if.substring(6) + " reviews"));
     } else if (fld.exists_if) {
-        hc.push('<li class="is-diagnostic format-inline is-warning-note">Present on reviews matching “' + escape_html(fld.exists_if) + '”</li>');
+        e.append($e("li", "is-diagnostic format-inline is-warning-note", "Present on reviews matching “" + fld.exists_if + "”"));
     }
-    hc.pop();
 
-    if (fld.description)
-        hc.push('<div class="field-d">'.concat(fld.description, '</div>'));
+    // description
+    if (fld.description) {
+        xfv.append((e = $e("div", "field-d")));
+        e.innerHTML = fld.description;
+    }
 
+    // content
+    ve = $e("div", "revev");
     if (fld.type === "dropdown") {
-        hc.push('<div class="revev"><span class="select"><select>', '</select></span></div>');
-        hc.push('<option value="0">(Choose one)</option>');
+        e = $e("select", null, $e("option", {value: 0}, "(Choose one)"));
         fld.each_value(function (fv) {
-            hc.push('<option>'.concat(fv.symbol, fv.sp1, fv.sp2, escape_html(fv.title), '</option>'));
+            e.add($e("option", null, "".concat(fv.symbol, fv.sp1, fv.sp2, fv.title)));
         });
         if (!fld.required) {
-            hc.push('<option value="none">N/A</option>');
+            e.add($e("option", {value: "none"}, "N/A"));
         }
-        hc.pop();
+        ve.append($e("span", "select", e));
     } else if (fld.type === "radio") {
-        hc.push('<div class="revev">', '</div>');
         fld.each_value(function (fv) {
-            hc.push('<label class="checki svline"><span class="checkc"><input type="radio" disabled></span><span class="rev_num sv '.concat(fv.className, '">', fv.symbol, fv.sp1, '</span>', fv.sp2, escape_html(fv.title), '</label>'));
+            ve.append($e("label", "checki svline",
+                $e("span", "checkc", $e("input", {type: "radio", disabled: true})),
+                $e("span", "rev_num sv " + fv.className, "".concat(fv.symbol, fv.sp1)),
+                fv.sp2 + fv.title));
         });
         if (!fld.required) {
-            hc.push('<label class="checki svline"><span class="checkc"><input type="radio" disabled></span>None of the above</label>');
+            ve.append($e("label", "checki svline",
+                $e("span", "checkc", $e("input", {type: "radio", disabled: true})),
+                "None of the above"));
         }
     } else if (fld.type === "text") {
-        hc.push('<div class="revev"><textarea class="w-text" rows="' + Math.max(fld.display_space || 0, 3) + '" disabled>Text field</textarea></div>');
+        ve.append($e("textarea", {"class": "w-text", rows: Math.max(fld.display_space || 0, 3), disabled: true}, "Text field"));
     } else if (fld.type === "checkboxes") {
-        hc.push('<div class="revev">', '</div>');
         fld.each_value(function (fv) {
-            hc.push('<label class="checki svline"><span class="checkc"><input type="checkbox" disabled></span><span class="rev_num sv '.concat(fv.className, '">', fv.symbol, fv.sp1, '</span>', fv.sp2, escape_html(fv.title), '</label>'));
+            ve.append($e("label", "checki svline",
+                $e("span", "checkc", $e("input", {type: "checkbox", disabled: true})),
+                $e("span", "rev_num sv " + fv.className, "".concat(fv.symbol, fv.sp1)),
+                fv.sp2 + fv.title));
         });
+    } else if (fld.type === "checkbox") {
+        addClass(labele, "checki");
+        labele.insertBefore($e("span", "checkc", $e("input", {type: "checkbox", disabled: true})), labele.firstChild);
+    }
+    if (ve.firstChild) {
+        xfv.append(ve);
     }
 
-    return hc.render();
+    return $e("div", "settings-xf-viewport", xfv);
 }
 
 function rf_move() {
     var rf = this.closest(".settings-rf");
-    if (hasClass(this, "moveup") && rf.previousSibling) {
+    if (hasClass(this, "move-up") && rf.previousSibling) {
         rf.parentNode.insertBefore(rf, rf.previousSibling);
-    } else if (hasClass(this, "movedown") && rf.nextSibling) {
+    } else if (hasClass(this, "move-down") && rf.nextSibling) {
         rf.parentNode.insertBefore(rf, rf.nextSibling.nextSibling);
     }
     hotcrp.tooltip.close(this);
@@ -711,21 +917,19 @@ var rfproperties = {
 }
 
 function rf_make(fj) {
-    var fld = hotcrp.make_review_field(fj);
+    const fld = hotcrp.make_review_field(fj);
     if (fj.id != null)
         fld.id = fj.id;
-    if (fj.selector != null)
-        fld.selector = fj.selector;
-    if (fj.instantiate != null)
-        fld.instantiate = fj.instantiate;
+    if (fj.legend != null)
+        fld.legend = fj.legend;
     if (fj.configurable != null)
         fld.configurable = fj.configurable;
     return fld;
 }
 
 function rf_append(fld) {
-    var pos = fieldorder.length + 1, $f, i, e, ne, prop, $j,
-        rftype = field_find(rftypes, fld.type || "radio");
+    var pos = fieldorder.length + 1, $f, i,
+        rftype = rffinder(fld.type || "radio");
     if (!fld.id) {
         var pat = /text/.test(rftype.name) ? "t%02d" : "s%02d";
         for (i = 0; i === 0 || fieldorder.indexOf(fld.id) >= 0; )
@@ -738,11 +942,11 @@ function rf_append(fld) {
     }
     fld = rf_make(fld);
     fieldorder.push(fld.id);
-    $f = $($("#rf_template").html().replace(/\$/g, pos));
-    field_instantiate($f.children(".settings-rf-edit")[0], rftypes, rftype.name, rfproperties);
+    $f = $($("#rf_template").html().replace(/\/\$/g, "/" + pos));
+    field_instantiate($f.children(".settings-xf-edit")[0], rffinder, rftype.name, rfproperties);
     $f.find(".js-settings-rf-delete").on("click", rf_delete);
     $f.find(".js-settings-rf-move").on("click", rf_move);
-    $f.find(".rf-id").val(fld.id);
+    $f.find(".is-id").val(fld.id);
     $f.appendTo("#settings-rform");
     rf_fill(pos, fld, true);
     $f.awaken();
@@ -761,7 +965,6 @@ function rf_add(fld) {
 
 function rfs(data) {
     var i, t, fld, mi, pfx, e, m, entryi;
-    samples = data.samples;
     rftypes = data.types;
 
     // construct form for original fields
@@ -805,72 +1008,74 @@ function rfs(data) {
                 e = document.getElementById(m[1] + "/values_text");
             }
             if (e && (entryi = e.closest(".entryi"))) {
-                append_feedback_near(entryi, mi);
+                feedback.append_item_near(entryi, mi);
                 if (mi.status > 1)
                     foldup.call(entryi, null, {n: 2, open: true});
             }
             if ((m = mi.field.match(/^([^/]*\/\d+)(?=$|\/)/))
                 && (e = document.getElementById(m[1] + "/view"))
                 && (e = e.querySelector("ul.feedback-list"))) {
-                append_feedback_to(e, mi);
+                feedback.append_item_near(e, mi);
             }
         }
     }
 
     rf_order();
-    form_highlight("#f-settings");
+    check_form_differs("#f-settings");
+}
+
+demand_load.review_field_library = demand_load.make(function (resolve) {
+    $.get(hoturl("api/reviewfieldlibrary"), null, resolve);
+});
+
+function rf_make_sample(fj) {
+    const xj = Object.assign({}, fj);
+    fj.sample_view && Object.assign(xj, fj.sample_view);
+    const fld = rf_make(xj);
+    fld.__base = fj;
+    return fld;
 }
 
 function add_dialog() {
-    var $d, sel;
-    function cur_sample() {
-        var i = sel.options[sel.selectedIndex].value | 0;
-        i = (samples[i] ? i : 0);
-        if (!samples[i].parse_value)
-            samples[i] = rf_make(samples[i]);
-        return samples[i];
-    }
-    function render_template() {
-        var rft = $d.find(".settings-rf-template-view")[0], ex;
-        if (hasClass(rft.lastChild, "settings-rf-example"))
-            rft.lastChild.remove();
-        ex = document.createElement("div");
-        ex.className = "settings-rf-example";
-        ex.innerHTML = rf_render_view(cur_sample());
-        rft.appendChild(ex);
-    }
+    let $pu, grid, samples;
     function submit(evt) {
-        var fld = Object.assign({}, cur_sample());
+        var samp = samples[+grid.getAttribute("data-selected-index")],
+            fld = Object.assign({}, samp.__base);
         delete fld.id;
-        for (const i of Object.keys(fld.instantiate || {})) {
-            fld[i] = fld.instantiate[i];
-        }
         rf_add(fld);
-        document.getElementById("rf/" + fieldorder.length + "/name").focus();
-        $d.close();
+        $$("rf/" + fieldorder.length + "/name").focus();
+        $pu.close();
         rf_order();
-        form_highlight("#f-settings");
+        check_form_differs("#f-settings");
         evt.preventDefault();
     }
-    function create() {
-        var hc = popup_skeleton({className: "modal-dialog-w40"}), i;
-        hc.push('<h2>Add field</h2>');
-        hc.push('<p>Choose a template for the new field.</p>');
-        hc.push('<select name="rf_template" class="w-99 want-focus" size="5">', '</select>');
-        for (i = 0; i !== samples.length; ++i) {
-            hc.push('<option value="'.concat(i, i ? '">' : '" selected>', escape_html(samples[i].selector), '</option>'));
+    function create(library) {
+        samples = library.samples;
+        rftypes = library.types;
+        grid = $e("div", {"class": "grid-select grid-select-autosubmit", role: "listbox"});
+        $pu = $popup({className: "modal-dialog-wide"})
+            .append($e("h2", null, "Add review field"), $e("p", null, "Choose a template for the new field."), grid)
+            .append_actions($e("button", {type: "submit", name: "add", "class": "btn-primary"}, "Add field"),
+                $e("button", {type: "button", name: "cancel"}, "Cancel"))
+            .show();
+        for (let i = 0; i !== samples.length; ++i) {
+            if (!samples[i].parse_value) {
+                samples[i] = rf_make_sample(samples[i]);
+            }
+            const xfvp = rf_render_view(samples[i], true);
+            xfvp.setAttribute("role", "presentation");
+            grid.append($e("fieldset", {"class": "grid-option", "data-index": i, role: "option", tabindex: 0, "aria-selected": "false"},
+                $e("legend", null, samples[i].legend),
+                xfvp));
         }
-        hc.pop();
-        hc.push('<fieldset class="settings-rf-template-view mt-4 modal-demo-fieldset"><legend>Example</legend></fieldset>');
-        hc.push_actions(['<button type="submit" name="add" class="btn-primary">Add field</button>',
-            '<button type="button" name="cancel">Cancel</button>']);
-        $d = hc.show();
-        sel = $d.find("select")[0];
-        render_template();
-        $(sel).on("input", render_template);
-        $d.find("form").on("submit", submit);
+        settings_disable_children(grid);
+        grid_select_event.call(grid, 0);
+        grid.addEventListener("keydown", grid_select_event);
+        grid.addEventListener("click", grid_select_event);
+        grid.addEventListener("dblclick", grid_select_event);
+        $pu.on("submit", submit);
     }
-    create();
+    demand_load.review_field_library().then(create);
 }
 
 handle_ui.on("js-settings-rf-add", add_dialog);
@@ -893,7 +1098,7 @@ handle_ui.on("js-settings-response-new", function () {
     $rx = $("#response\\/" + i);
     $rx.find("textarea").css({height: "auto"}).autogrow();
     $rx.awaken();
-    form_highlight(this.form);
+    check_form_differs(this.form);
 });
 
 handle_ui.on("js-settings-response-delete", function () {
@@ -904,7 +1109,7 @@ handle_ui.on("js-settings-response-delete", function () {
     } else {
         settings_delete(rr, "This response round will be removed.");
     }
-    form_highlight(this.form);
+    check_form_differs(this.form);
 });
 
 handle_ui.on("input.js-settings-response-name", function () {
@@ -920,9 +1125,9 @@ handle_ui.on("input.js-settings-response-name", function () {
     if (s === "") {
         helt.replaceChildren("Example display: ‘Response’; example search: ‘has:response’");
     } else if (!/^[A-Za-z][-_A-Za-z0-9]*$/.test(s)) {
-        helt.replaceChildren(render_feedback_list([{status: 2, message: "<0>Round names must start with a letter and can contain only letters, numbers, and dashes"}]));
+        helt.replaceChildren(feedback.render_list([{status: 2, message: "<0>Round names must start with a letter and can contain only letters, numbers, and dashes"}]));
     } else if (/^(?:none|any|all|default|undefined|unnamed|.*response|response.*|draft.*|pri(?:mary)|sec(?:ondary)|opt(?:ional)|pc(?:review)|ext(?:ernal)|meta(?:review))$/i.test(s)) {
-        helt.replaceChildren(render_feedback_list([{status: 2, message: "<0>Round name ‘".concat(s, "’ is reserved")}]));
+        helt.replaceChildren(feedback.render_list([{status: 2, message: "<0>Round name ‘".concat(s, "’ is reserved")}]));
     } else {
         helt.replaceChildren("Example display: ‘", s, " Response’; example search: ‘has:", s, "response’");
     }
@@ -938,7 +1143,7 @@ handle_ui.on("js-settings-decision-add", function () {
     $r.find("input[type=text]").autogrow();
     $(form.elements["decision/" + ctr + "/category"]).trigger("change");
     form.elements["decision/" + ctr + "/name"].focus();
-    form_highlight(form);
+    check_form_differs(form);
 });
 
 handle_ui.on("js-settings-decision-delete", function () {
@@ -949,7 +1154,7 @@ handle_ui.on("js-settings-decision-delete", function () {
             + (sc ? ' and <a href="'.concat(hoturl_html("search", {q: "dec:\"" + ne.defaultValue + "\""}), '" target="_blank" rel="noopener">', plural(sc, "submission"), '</a> set to undecided.') : '.'))) {
         addClass(this.closest("div"), "hidden");
     }
-    form_highlight(this.form);
+    check_form_differs(this.form);
 });
 
 handle_ui.on("js-settings-decision-new-name", function () {
@@ -1044,15 +1249,21 @@ function canonical_input_type(it) {
 
 // Return an object `wsel` representing the current Selection, specialized for
 // element `el`.
-// * Move selection endpoints within `el` down into Text nodes if possible.
-// * `nsel.transfer_text(dst, src, src_min_offset, delta)` shifts pending
-//   selection endpoints from `src` to `dst`, depending on offset. Useful when
-//   splitting or combining Text nodes.
-// * `nsel.trim_newline(el)` trims trailing newlines from `el`, changing the
-//   pending selection as appropriate.
-// * `nsel.refresh()` installs the pending selection.
+//
+// When called, this shifts selection endpoints into `el` Text nodes when
+// possible.
+//
+// Methods on `wsel` allow callers to modify the DOM within `el` while tracking
+// what should happen to the selection in response. After completing their
+// DOM modifications, the caller should call `wsel.refresh()` to install
+// the modified selection.
+// * `wsel.splitTextNode(ch, pos)` is like `ch.splitTextNode(pos)`.
+// * `wsel.mergeTextNodeRight(ch)` is like `ch.appendData(ch.nextSibling.data);
+//   ch.nextSibling.remove()`.
+// * `wsel.removeNode(n)` is like `n.remove()`.
+// * `wsel.trimNewlines(ch)` trims trailing newlines from `ch`.
 function window_selection_inside(el) {
-    var sel = window.getSelection(),
+    let sel = window.getSelection(),
         selm = [el.contains(sel.anchorNode), el.contains(sel.focusNode)],
         selmx = selm[0] || selm[1],
         selx = [sel.anchorNode, sel.anchorOffset, sel.focusNode, sel.focusOffset];
@@ -1079,19 +1290,50 @@ function window_selection_inside(el) {
         }
         return changed;
     }
-    function refresh() {
-        selmx && sel.setBaseAndExtent(selx[0], selx[1], selx[2], selx[3]);
-    }
-    if (normalize_edge(0) || normalize_edge(2)) {
-        refresh();
-    }
     function transfer_text(dst, src, src_min_offset, offset_delta) {
-        for (var i = selmx ? 0 : 4; i !== 4; i += 2) {
+        for (let i = selmx ? 0 : 4; i !== 4; i += 2) {
             if (selx[i] === src && selx[i + 1] >= src_min_offset) {
                 selx[i] = dst;
                 selx[i + 1] += offset_delta;
             }
         }
+    }
+    function splitTextNode(ch, pos) {
+        const split = ch.splitText(pos);
+        selmx && transfer_text(split, ch, pos, -pos);
+        return split;
+    }
+    function mergeTextNodeRight(ch) {
+        const next = ch.nextSibling;
+        selmx && transfer_text(ch, next, 0, ch.length);
+        ch.appendData(next.data);
+        removeNode(next);
+    }
+    function positionWithinParent(n) {
+        let i = 0, ch = n.parentNode.firstChild;
+        while (ch && ch !== n) {
+            ++i;
+            ch = ch.nextSibling;
+        }
+        return ch ? i : null;
+    }
+    function removeNode(n) {
+        let npos = null;
+        for (let i = selmx ? 0 : 4; i !== 4; i += 2) {
+            if (selx[i] === n.parentNode) {
+                npos === null && (npos = positionWithinParent(n));
+                if (npos !== null && selx[i + 1] > npos) {
+                    --selx[i + 1];
+                }
+            }
+        }
+        n.remove();
+    }
+    function refresh() {
+        selmx && sel.setBaseAndExtent(selx[0], selx[1], selx[2], selx[3]);
+    }
+    if (normalize_edge(0) || normalize_edge(2)) {
+        refresh();
     }
     function render_sel(el, offset) {
         if (!el) {
@@ -1115,16 +1357,18 @@ function window_selection_inside(el) {
     }
     return {
         modified: selmx,
-        transfer_text: transfer_text,
-        trim_newline: function (el) {
-            var i = el.length - 1;
-            while (i >= 0 && el.data[i] === "\n") {
-                el.deleteData(i, 1);
-                transfer_text(el, el, i + 1, -1);
+        splitTextNode: splitTextNode,
+        mergeTextNodeRight: mergeTextNodeRight,
+        removeNode: removeNode,
+        trimNewlines: function (ch) {
+            let i = ch.length - 1;
+            while (i >= 0 && ch.data[i] === "\n") {
+                ch.deleteData(i, 1);
+                transfer_text(ch, ch, i + 1, -1);
                 --i;
             }
         },
-        reset_modified: function (el, offset) {
+        setContainedPositions: function (el, offset) {
             selm[0] && reset(0, el, offset);
             selm[1] && reset(2, el, offset);
         },
@@ -1147,27 +1391,26 @@ function make_content_editable(mainel) {
     // * No trailing newlines within these <div>s.
     // * Blank <div> lines contain <br>.
     function normalizer(firstel, lastel) {
-        var ch, next, fix1, fixfresh, nsel = window_selection_inside(mainel);
+        let ch, next, fix1, fixfresh, nsel = window_selection_inside(mainel);
 
         function append_line() {
-            var line = document.createElement("div");
+            const line = document.createElement("div");
             mainel.insertBefore(line, fix1.nextSibling);
             fix1 = line;
             fixfresh = true;
         }
 
         function fix_div(ch) {
-            var next, nl;
+            let next, nl;
             while (ch) {
                 next = ch.nextSibling;
                 if (ch.nodeType !== 1 && ch.nodeType !== 3) {
                     ch.remove();
                 } else if (ch.nodeType === 3 && (nl = ch.data.indexOf("\n")) !== -1) {
                     if (nl !== ch.length - 1) {
-                        next = ch.splitText(nl + 1);
-                        nsel.transfer_text(next, ch, nl + 1, -nl - 1);
+                        next = nsel.splitTextNode(ch, nl + 1);
                     }
-                    nsel.trim_newline(ch);
+                    nsel.trimNewlines(ch);
                     if (fix1 !== ch.parentElement) {
                         fix1.appendChild(ch);
                     }
@@ -1179,14 +1422,14 @@ function make_content_editable(mainel) {
                     }
                 } else if (is_br(ch)) {
                     if (fix1.firstChild && fix1.firstChild !== ch) {
-                        ch.remove();
+                        nsel.removeNode(ch);
                     } else if (fix1 !== ch.parentElement) {
                         fix1.appendChild(ch);
                     }
                     append_line();
                 } else {
                     fixfresh || append_line();
-                    ch.remove();
+                    nsel.removeNode(ch);
                     fix_div(ch.firstChild);
                     fixfresh || append_line();
                 }
@@ -1195,12 +1438,13 @@ function make_content_editable(mainel) {
         }
 
         ch = firstel = firstel || mainel.firstChild;
+        const prev = firstel ? firstel.previousSibling : null;
         while (ch && ch !== lastel) {
             if (ch.nodeType !== 1
                 || ch.tagName !== "DIV"
                 || ch.hasAttribute("style")) {
-                var line = document.createElement("div"),
-                    line1 = ch === firstel, child1 = true;
+                const line = document.createElement("div");
+                let child1 = true;
                 mainel.insertBefore(line, ch);
                 while (ch && (child1 || is_text_or_inline(ch))) {
                     line.appendChild(ch);
@@ -1208,22 +1452,21 @@ function make_content_editable(mainel) {
                     child1 = false;
                 }
                 if (ch && is_br(ch)) {
-                    line.firstChild ? ch.remove() : line.appendChild(ch);
+                    line.firstChild ? nsel.removeNode(ch) : line.appendChild(ch);
                 }
-                line1 && (firstel = line);
                 ch = line;
             }
             next = ch.nextSibling;
             fix1 = ch;
             fixfresh = false;
             fix_div(ch.firstChild);
-            ch.firstChild || ch.remove();
-            fixfresh && fix1.remove();
+            ch.firstChild || nsel.removeNode(ch);
+            fixfresh && nsel.removeNode(fix1);
             ch = next;
         }
 
         nsel.refresh();
-        return firstel;
+        return prev ? prev.nextSibling : mainel.firstChild;
     }
 
     function length() {
@@ -1512,6 +1755,7 @@ function make_content_editable(mainel) {
     };
 }
 
+/* eslint-disable-next-line no-control-regex */
 let json_string_re = /"(?:[^\\"\x00-\x1F]|\\[/\\bfnrt"]|\\u[0-9a-fA-F]{4})+"/y;
 
 
@@ -1581,21 +1825,19 @@ function jsonhl_install(lineel, errors, nsel) {
         if (ch.nodeType !== 3) {
             jsonhl_move_text(lineel, ch, ch.nextSibling);
             sib = ch.nextSibling;
-            ch.remove();
+            nsel.removeNode(ch);
             ch = sib;
         }
         while (ch && (sib = ch.nextSibling) && ch.length < len) {
-            if (sib.nodeType !== 3) {
-                jsonhl_move_text(lineel, sib, sib.nextSibling);
+            if (sib.nodeType === 3) {
+                nsel.mergeTextNodeRight(ch);
             } else {
-                nsel.transfer_text(ch, sib, 0, ch.length);
-                ch.appendData(sib.data);
+                jsonhl_move_text(lineel, sib, sib.nextSibling);
+                nsel.removeNode(sib);
             }
-            sib.remove();
         }
         if (ch && ch.length > len) {
-            sib = ch.splitText(len);
-            nsel.transfer_text(sib, ch, len, -len);
+            sib = nsel.splitTextNode(ch, len);
         }
     }
 
@@ -1631,31 +1873,8 @@ function jsonhl_install(lineel, errors, nsel) {
 
     if (lineel.firstChild === null) {
         lineel.appendChild(document.createElement("br"));
-        nsel.reset_modified(lineel, 0);
+        nsel.setContainedPositions(lineel, 0);
     }
-}
-
-function log_line_summary(lineno, lineel) {
-    var x = [], i = 0, ch,
-        sel = window.getSelection(), sub = lineel.contains(sel.anchorNode);
-    for (ch = lineel.firstChild; ch; ch = ch.nextSibling, ++i) {
-        if (sel.anchorNode === lineel && sel.anchorOffset === i) {
-            x.push("*");
-        }
-        if (ch.nodeType === 3 && sel.anchorNode === ch) {
-            x.push("T".concat(ch.length, "@", sel.anchorOffset));
-        } else if (ch.nodeType === 3) {
-            x.push("T".concat(ch.length));
-        } else if (sub && ch.contains(sel.anchorNode)) {
-            x.push(ch.tagName.concat(ch.childNodes.length, "@", sel.anchorOffset));
-        } else {
-            x.push(ch.tagName.concat(ch.childNodes.length));
-        }
-    }
-    if (sel.anchorNode === lineel && sel.anchorOffset === i) {
-        x.push("*");
-    }
-    console.log("".concat(lineno, ". ", x.join(" ")));
 }
 
 function make_utf16tf(text) {
@@ -2236,29 +2455,27 @@ function json_path_position(s, path) {
 }
 
 function make_json_validate() {
-    var mainel = this, reflectel = null,
+    let mainel = this, reflectel = null,
         maince = make_content_editable(mainel),
         states = [""], lineels = [null],
         redisplay_ln0 = 0, redisplay_el1 = null,
         normalization, rehighlight_queued,
         api_timer = null, api_value = null, msgbub = null,
-        commands = [], commandPos = 0,
+        commands = [], commandPos = 0, command_fix = false,
         undo_time, redo_time;
 
     function rehighlight() {
         try {
-            var i, saw_line1 = false, lineel, k, st, x, cmd, nsel;
-            if (normalization !== 0) {
+            var i, saw_line1 = false, lineel, k, st, x, nsel;
+            if (normalization < 0) {
                 maince.normalize();
-                if (normalization < 0
-                    && mainel.hasAttribute("data-highlight-ranges")) {
+                if (mainel.hasAttribute("data-highlight-ranges")) {
                     jsonhl_transfer_ranges(mainel);
                 }
             }
             i = redisplay_ln0;
             lineel = mainel.childNodes[i];
             st = states[i];
-            cmd = commands[commandPos - 1];
             nsel = window_selection_inside(mainel);
             while (lineel !== null
                    && (!saw_line1
@@ -2267,7 +2484,7 @@ function make_json_validate() {
                 if (msgbub && msgbub.span.parentElement === lineel) {
                     clear_msgbub();
                 }
-                if (lineel.nodeType !== 1 || lineel.tagName !== "DIV") {
+                if (lineel.nodeType !== 1 || lineel.tagName !== "DIV") { // XXX unsure ever happens
                     lineel = maince.normalize(lineel, lineel.nextSibling);
                 }
                 if (normalization >= 0) {
@@ -2276,7 +2493,6 @@ function make_json_validate() {
                 }
                 if (lineel === redisplay_el1) {
                     saw_line1 = true;
-                    cmd && cmd.afterRange[1] < 0 && (cmd.afterRange[1] = i);
                 }
                 if (lineels[i] !== lineel && lineels[i]) {
                     // incremental line insertions and deletions
@@ -2327,7 +2543,7 @@ function make_json_validate() {
     }
 
     function handle_reflection() {
-        form_highlight(reflectel.form, reflectel);
+        check_form_differs(reflectel.form, reflectel);
         if (mainel.hasAttribute("data-reflect-highlight-api")) {
             api_timer && clearTimeout(api_timer);
             api_timer = setTimeout(handle_reflect_api, 500);
@@ -2366,9 +2582,9 @@ function make_json_validate() {
 
     function union_range(r1, r2) {
         r1 = r1 || [Infinity, 0];
-        if (r2[0] >= 0 && r1[0] > r2[0])
+        if (r2[0] >= 0 && r2[0] < r1[0])
             r1 = [r2[0], r1[1]];
-        if (r2[1] >= 0 && r1[1] < r2[1])
+        if (r2[1] >= 0 && r2[1] > r1[1])
             r1 = [r1[0], r2[1]];
         return r1;
     }
@@ -2387,11 +2603,12 @@ function make_json_validate() {
         if (commandPos < commands.length) {
             commands.splice(commandPos);
         }
-        var c = commands[commandPos - 1], t = canonical_input_type(evt.inputType);
+        let c = commands[commandPos - 1], t = canonical_input_type(evt.inputType);
         if (!(c
               && c.type === t
               && evt.timeStamp <= c.recentTime + 250
-              && evt.timeStamp <= c.startTime + 3000)) {
+              && evt.timeStamp <= c.startTime + 3000
+              && !c.afterLines)) {
             if (commandPos > 2000) {
                 commands.splice(0, 1000);
             }
@@ -2405,40 +2622,46 @@ function make_json_validate() {
         }
         if (editRange[0] < c.beforeRange[0]) {
             c.beforeLines.splice(0, 0, ...maince.slice(editRange[0], c.beforeRange[0]));
-            c.beforeRange[0] = editRange[1];
+            c.beforeRange[0] = c.afterRange[0] = editRange[0];
         }
-        if (c.afterRange[1] < editRange[1]) {
+        if (editRange[1] > c.afterRange[1]) {
             c.beforeLines.splice(c.beforeLines.length, 0, ...maince.slice(c.afterRange[1], editRange[1]));
             c.beforeRange[1] += editRange[1] - c.afterRange[1];
         }
-        if (c.afterRange[1] <= editRange[1]) {
-            c.afterRange[1] = -1; // recompute end of range
-        }
+        redisplay_ln0 = c.beforeRange[0];
+        redisplay_el1 = mainel.childNodes[Math.max(c.afterRange[1], editRange[1])];
+        command_fix = true;
         c.recentTime = evt.timeStamp;
     }
 
     function handle_swap(dstRange, dstTexts, srcRange, srcTexts) {
-        var i, n = srcRange[1], elx = mainel.childNodes[n], el;
-        while (n > dstRange[1]) {
-            --n;
-            el = elx ? elx.previousSibling : mainel.lastChild;
-            el.remove();
+        if (srcRange[0] !== dstRange[0]
+            || srcTexts.length !== srcRange[1] - srcRange[0]
+            || dstTexts.length !== dstRange[1] - dstRange[0]) {
+            throw new Error("bad handle_swap " + JSON.stringify([srcRange, srcTexts.length, dstRange, dstTexts.length]));
         }
-        while (n < dstRange[1]) {
-            el = document.createElement("div");
-            el.append(document.createElement("br"));
-            mainel.insertBefore(el, elx);
-            ++n;
-        }
-        el = mainel.childNodes[dstRange[0]];
-        for (i = 0; el !== elx; el = el.nextSibling, ++i) {
+        let el = mainel.childNodes[dstRange[0]], i = 0;
+        while (i < dstTexts.length) {
+            if (i >= srcTexts.length) {
+                const nel = document.createElement("div");
+                mainel.insertBefore(nel, el);
+                el = nel;
+            }
             el.replaceChildren(dstTexts[i].length <= 1 ? document.createElement("br") : dstTexts[i].substring(0, dstTexts[i].length - 1));
+            ++i;
+            el = el.nextSibling;
+        }
+        while (i < srcTexts.length) {
+            const nel = el.nextSibling;
+            el.remove();
+            ++i;
+            el = nel;
         }
         redisplay_ln0 = dstRange[0];
-        redisplay_el1 = elx;
+        redisplay_el1 = el;
         queue_rehighlight();
         // place selection at end of difference
-        var dt = dstTexts[dstTexts.length - 1] || "",
+        const dt = dstTexts[dstTexts.length - 1] || "",
             dl = dt.length,
             st = srcTexts[srcTexts.length - 1] || "",
             sl = st.length;
@@ -2447,11 +2670,12 @@ function make_json_validate() {
             --i;
         }
         let [b, off] = maince.lp2boff(dstRange[1] - 1, i + 1);
+        $(b).scrollIntoView({marginTop: 24, atTop: true});
         window.getSelection().setBaseAndExtent(b, off, b, off);
     }
 
     function handle_undo(time) {
-        var c = commands[commandPos - 1];
+        const c = commands[commandPos - 1];
         if (c && (undo_time === null || time - undo_time > 3)) {
             undo_time = undo_time || time;
             c.recentTime = 0;
@@ -2463,7 +2687,7 @@ function make_json_validate() {
     }
 
     function handle_redo(time) {
-        var c = commands[commandPos];
+        const c = commands[commandPos];
         if (c && (redo_time === null || time - redo_time > 3)) {
             redo_time = redo_time || time;
             handle_swap(c.afterRange, c.afterLines, c.beforeRange, c.beforeLines);
@@ -2472,7 +2696,7 @@ function make_json_validate() {
     }
 
     function beforeinput(evt) {
-        var t = evt.inputType;
+        const t = evt.inputType;
         if (t !== "historyUndo") {
             undo_time = null;
         }
@@ -2488,12 +2712,23 @@ function make_json_validate() {
             evt.preventDefault();
             handle_redo(evt.timeStamp);
         } else {
-            var r = event_range(evt);
-            redisplay_ln0 = r[0];
-            redisplay_el1 = r[1] >= 0 ? mainel.childNodes[r[1]] : null;
-            prepare_undo(r, evt);
+            prepare_undo(event_range(evt), evt);
             evt.dataTransfer && (normalization = 1);
         }
+    }
+
+    function afterinput(evt) {
+        if (command_fix) {
+            let i = redisplay_ln0,
+                lineel = maince.normalize(mainel.childNodes[i], redisplay_el1);
+            while (lineel !== null && lineel !== redisplay_el1) {
+                ++i;
+                lineel = lineel.nextSibling;
+            }
+            commands[commandPos - 1].afterRange[1] = i;
+            command_fix = false;
+        }
+        queue_rehighlight(evt);
     }
 
     function clear_msgbub() {
@@ -2537,8 +2772,8 @@ function make_json_validate() {
         var tips = jsonhl_highlight_tips(lineel.getAttribute("data-highlight-tips")) || [];
         for (i = 0; i !== tips.length; ++i) {
             if (tips[i].pos1 <= pos && pos <= tips[i].pos2) {
-                msgbub = make_bubble({anchor: "nw", color: "feedback"})
-                    .html(render_feedback_list([tips[i]]))
+                msgbub = make_bubble({anchor: "nw", color: "feedback", container: mainel.parentElement})
+                    .html(feedback.render_list([tips[i]]))
                     .near(node);
                 msgbub.span = node;
                 return;
@@ -2602,7 +2837,7 @@ function make_json_validate() {
     }
 
     mainel.addEventListener("beforeinput", beforeinput);
-    mainel.addEventListener("input", queue_rehighlight);
+    mainel.addEventListener("input", afterinput);
     document.addEventListener("selectionchange", selectionchange);
     if (mainel.hasAttribute("data-reflect-text")
         && (reflectel = document.getElementById(mainel.getAttribute("data-reflect-text")))) {
@@ -2780,7 +3015,7 @@ function settings_describe(d) {
         $i.append(e);
     }
 
-    $i.find(".taghh, .badge").each(ensure_pattern_here);
+    $i.find(".taghh, .badge").each(hotcrp.ensure_pattern_here);
 }
 
 function settings_path_jump(el, path, use_key) {

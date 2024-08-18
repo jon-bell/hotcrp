@@ -35,11 +35,12 @@ class Offline_Page {
             $this->ms->error_at("file");
             return false;
         }
-        $rf = $this->conf->review_form();
-        $tf = ReviewValues::make_text($rf, $this->qreq->file_contents("file"),
-                                      $this->qreq->file_filename("file"));
-        while ($tf->parse_text($this->qreq->override)) {
+        $tf = (new ReviewValues($this->conf))
+            ->set_text($this->qreq->file_content("file"),
+                       $this->qreq->file_filename("file"));
+        while ($tf->set_req_override(!!$this->qreq->override)->parse_text()) {
             $tf->check_and_save($this->user, null, null);
+            $tf->clear_req();
         }
         $tf->report();
         $this->conf->redirect_self($this->qreq);
@@ -49,7 +50,7 @@ class Offline_Page {
     /** @return bool */
     function handle_tag_indexes() {
         if ($this->qreq->upload && $this->qreq->has_file("file")) {
-            if (($text = $this->qreq->file_contents("file")) === false) {
+            if (($text = $this->qreq->file_content("file")) === false) {
                 $this->conf->error_msg("<0>Internal error: cannot read uploaded file");
                 return false;
             }
@@ -81,19 +82,20 @@ class Offline_Page {
         }
     }
 
+    /** @return bool */
     function handle_request() {
-        if ($this->qreq->download || $this->qreq->downloadForm /* XXX */) {
+        if ($this->qreq->download) {
             $this->handle_download();
             return true;
-        }
-        if (($this->qreq->upload || $this->qreq->uploadForm /* XXX */)
-            && $this->qreq->valid_post()) {
+        } else if ($this->qreq->upload
+                   && $this->qreq->valid_post()) {
             return $this->handle_upload();
-        }
-        if (($this->qreq->setvote || $this->qreq->setrank)
-            && $this->qreq->valid_post()
-            && $this->user->is_reviewer()) {
+        } else if (($this->qreq->setvote || $this->qreq->setrank)
+                   && $this->qreq->valid_post()
+                   && $this->user->is_reviewer()) {
             return $this->handle_tag_indexes();
+        } else {
+            return false;
         }
     }
 
@@ -169,7 +171,7 @@ class Offline_Page {
         } else if (!$user->is_reviewer()) {
             Multiconference::fail($qreq, 403, ["title" => "Offline reviewing"], "<0>You aren’t registered as a reviewer or PC member for this conference");
         } else if (!$user->conf->time_review_open() && !$user->privChair) {
-            Multiconference::fail($qreq, 403, ["title" => "Offline reviewing"], "<0>The site is not open for review");
+            Multiconference::fail($qreq, 403, ["title" => "Offline reviewing"], "<0>Reviewing is currently closed");
         }
 
         if ($qreq->post && $qreq->post_empty()) {
