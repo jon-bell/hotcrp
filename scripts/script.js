@@ -14205,3 +14205,111 @@ Object.assign(window.hotcrp, {
     usere: usere
     // wstorage
 });
+
+
+// Review Quality Check UI
+(function () {
+"use strict";
+
+function rqc_submit_form(form, evt) {
+    evt.preventDefault();
+    var f = $(form),
+        action = f.attr("action"),
+        data = f.serialize();
+
+    $.ajax({
+        url: action,
+        type: "POST",
+        data: data,
+        dataType: "json",
+        success: function (jr) {
+            if (jr.ok) {
+                if (jr.message_list) {
+                    jr.message_list.forEach(function (mi) {
+                        if (mi.message) {
+                            var cls = mi.status >= 2 ? "is-warning" : (mi.status <= 0 ? "is-success" : "");
+                            var div = document.createElement("div");
+                            div.className = "feedback " + cls;
+                            div.textContent = mi.message.replace(/^<\d+>/, "");
+                            form.parentNode.insertBefore(div, form);
+                            setTimeout(function () { div.remove(); }, 5000);
+                        }
+                    });
+                }
+                if (jr.comment) {
+                    rqc_append_comment(form, jr.comment);
+                    var textarea = form.querySelector("textarea");
+                    if (textarea) textarea.value = "";
+                }
+                if (jr.quality_check) {
+                    location.reload();
+                }
+            } else if (jr.message_list) {
+                jr.message_list.forEach(function (mi) {
+                    if (mi.message) {
+                        var div = document.createElement("div");
+                        div.className = "feedback is-warning";
+                        div.textContent = mi.message.replace(/^<\d+>/, "");
+                        form.parentNode.insertBefore(div, form);
+                        setTimeout(function () { div.remove(); }, 5000);
+                    }
+                });
+            }
+        },
+        error: function () {
+            var div = document.createElement("div");
+            div.className = "feedback is-warning";
+            div.textContent = "Error communicating with server.";
+            form.parentNode.insertBefore(div, form);
+            setTimeout(function () { div.remove(); }, 5000);
+        }
+    });
+}
+
+function rqc_append_comment(form, cj) {
+    var thread = form.closest(".rqc-comments");
+    if (!thread) return;
+    var thr = thread.querySelector(".rqc-thread");
+    if (!thr) {
+        thr = document.createElement("div");
+        thr.className = "rqc-thread";
+        var body = thread.querySelector(".revcard-body");
+        var note = body.querySelector(".feedback.is-note");
+        if (note) note.remove();
+        var newcomment = thread.querySelector(".rqc-new-comment");
+        if (newcomment) {
+            body.insertBefore(thr, newcomment);
+        } else {
+            body.appendChild(thr);
+        }
+    }
+    var div = document.createElement("div");
+    div.className = "rqc-comment " + (cj.is_by_reviewer ? "rqc-comment-reviewer" : "rqc-comment-meta");
+    div.id = cj.html_id || "";
+    var header = '<div class="rqc-comment-header">';
+    header += '<span class="rqc-comment-author">' + (cj.author || "You") + '</span>';
+    if (cj.is_by_reviewer) {
+        header += ' <span class="badge tag-yellow">Reviewer</span>';
+    } else {
+        header += ' <span class="badge tag-purple">Meta reviewer</span>';
+    }
+    header += ' <span class="rqc-comment-vis badge tag-gray">' + (cj.visibility || "meta") + '</span>';
+    header += ' <span class="rqc-comment-time">just now</span>';
+    header += '</div>';
+    div.innerHTML = header + '<div class="rqc-comment-body">' + escape_entities(cj.text).replace(/\n/g, "<br>") + '</div>';
+    thr.appendChild(div);
+}
+
+function escape_entities(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+$(document).on("submit", ".rqc-comment-form", function (evt) {
+    rqc_submit_form(this, evt);
+});
+
+$(document).on("submit", ".rqc-edit-form", function (evt) {
+    rqc_submit_form(this, evt);
+});
+
+})();

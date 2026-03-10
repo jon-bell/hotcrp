@@ -5881,4 +5881,157 @@ class Contact implements JsonSerializable {
         $a["roles"] = $this->roles;
         return $a;
     }
+
+
+    // Review quality check permissions
+
+    /** @return bool */
+    function can_view_review_quality_checks(PaperInfo $prow) {
+        if ($this->privChair || $this->is_chair()) {
+            return true;
+        }
+        if (!$this->conf->setting("review_quality_enabled")) {
+            return false;
+        }
+        $rights = $this->rights($prow);
+        if ($rights->allow_administer) {
+            return true;
+        }
+        if ($this->isPC && $this->is_metareviewer()) {
+            return true;
+        }
+        $rqc_tags = $this->conf->setting_data("review_quality_viewer_tags");
+        if ($rqc_tags && $this->contactTags) {
+            foreach (explode(" ", trim($rqc_tags)) as $tag) {
+                if ($tag !== "" && stripos($this->contactTags, " {$tag} ") !== false) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** @return bool */
+    function can_edit_review_quality_check(PaperInfo $prow, ?ReviewQualityCheckInfo $qc = null) {
+        if (!$this->conf->setting("review_quality_enabled")) {
+            return false;
+        }
+        if ($this->privChair || $this->is_chair()) {
+            return true;
+        }
+        $rights = $this->rights($prow);
+        if ($rights->allow_administer) {
+            return true;
+        }
+        if ($qc && $qc->contactId === $this->contactId) {
+            return true;
+        }
+        if ($this->isPC && $this->is_metareviewer()) {
+            return true;
+        }
+        $rqc_tags = $this->conf->setting_data("review_quality_editor_tags");
+        if ($rqc_tags && $this->contactTags) {
+            foreach (explode(" ", trim($rqc_tags)) as $tag) {
+                if ($tag !== "" && stripos($this->contactTags, " {$tag} ") !== false) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** @return bool */
+    function can_view_review_quality_comment(PaperInfo $prow, ReviewQualityCommentInfo $rc) {
+        if ($this->privChair || $this->is_chair()) {
+            return true;
+        }
+        if (!$this->conf->setting("review_quality_enabled")) {
+            return false;
+        }
+        $vis = $rc->commentType & ReviewQualityCommentInfo::RQCVIS_MASK;
+        if ($vis === ReviewQualityCommentInfo::RQCVIS_ADMINONLY) {
+            return $this->privChair || $this->is_chair();
+        }
+        if ($rc->contactId === $this->contactId) {
+            return true;
+        }
+        if ($vis === ReviewQualityCommentInfo::RQCVIS_META_REVIEWER) {
+            if ($this->isPC && $this->is_metareviewer()) {
+                return true;
+            }
+            $rqc_tags = $this->conf->setting_data("review_quality_viewer_tags");
+            if ($rqc_tags && $this->contactTags) {
+                foreach (explode(" ", trim($rqc_tags)) as $tag) {
+                    if ($tag !== "" && stripos($this->contactTags, " {$tag} ") !== false) {
+                        return true;
+                    }
+                }
+            }
+            $rrow = $prow->review_by_id($rc->reviewId);
+            if ($rrow && $rrow->contactId === $this->contactId) {
+                return true;
+            }
+            return false;
+        }
+        if ($vis === ReviewQualityCommentInfo::RQCVIS_PC) {
+            return $this->isPC;
+        }
+        if ($vis === ReviewQualityCommentInfo::RQCVIS_REVIEWER) {
+            return $this->isPC || ($this->roles & self::ROLE_REVIEWER) !== 0;
+        }
+        return false;
+    }
+
+    /** @return bool */
+    function can_edit_review_quality_comment(PaperInfo $prow, ReviewQualityCommentInfo $rc) {
+        if (!$this->conf->setting("review_quality_enabled")) {
+            return false;
+        }
+        if ($this->privChair || $this->is_chair()) {
+            return true;
+        }
+        if ($rc->contactId === $this->contactId) {
+            return true;
+        }
+        $rights = $this->rights($prow);
+        return $rights->allow_administer;
+    }
+
+    /** @return bool */
+    function can_view_review_quality_checker_identity(ReviewQualityCheckInfo $qc) {
+        if ($this->privChair || $this->is_chair()) {
+            return true;
+        }
+        if ($qc->contactId === $this->contactId) {
+            return true;
+        }
+        if ($this->isPC && $this->is_metareviewer()) {
+            return true;
+        }
+        return false;
+    }
+
+    /** @return bool */
+    function can_view_review_quality_commenter_identity(ReviewQualityCommentInfo $rc) {
+        if ($this->privChair || $this->is_chair()) {
+            return true;
+        }
+        if ($rc->contactId === $this->contactId) {
+            return true;
+        }
+        if ($this->isPC && $this->is_metareviewer()) {
+            return true;
+        }
+        return false;
+    }
+
+    /** @return bool */
+    function can_assign_review_quality_check() {
+        return $this->privChair || $this->is_chair();
+    }
+
+    /** @return bool */
+    function can_view_review_quality_dashboard() {
+        return $this->privChair || $this->is_chair();
+    }
 }

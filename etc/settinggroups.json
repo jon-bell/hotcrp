@@ -457,6 +457,23 @@
     },
 
     {
+        "name": "reviewquality", "order": 650, "title": "Review quality",
+        "description": "<0>Review quality check settings and form."
+    },
+    {   "name": "rqc", "alias": "reviewquality"   },
+    {
+        "name": "reviewquality/main", "order": 10,
+        "print_function": "ReviewQualityForm_SettingParser::print",
+        "settings": [
+            "review_quality_enabled",
+            "review_quality_viewer_tags",
+            "review_quality_editor_tags",
+            "review_quality_form"
+        ]
+    },
+
+
+    {
         "name": "json", "order": 2000,
         "short_title": "Advanced", "title": "JSON site configuration",
         "description": "<0>Full site configuration in JSON.",

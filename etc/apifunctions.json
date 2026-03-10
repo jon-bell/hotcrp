@@ -253,5 +253,13 @@
         "name": "whoami", "get": true,
         "function": "User_API::whoami",
         "parameters": []
+    },
+    {
+        "name": "reviewquality", "paper": true, "get": true, "post": true,
+        "function": "ReviewQuality_API::run"
+    },
+    {
+        "name": "reviewqualitydashboard", "get": true,
+        "function": "ReviewQuality_API::dashboard"
     }
 ]

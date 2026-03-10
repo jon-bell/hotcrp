@@ -624,10 +624,65 @@ CREATE TABLE `TopicInterest` (
 
 
 
+--
+-- Table structure for table `ReviewQualityCheck`
+--
+
+DROP TABLE IF EXISTS `ReviewQualityCheck`;
+CREATE TABLE `ReviewQualityCheck` (
+  `reviewQualityCheckId` int(11) NOT NULL AUTO_INCREMENT,
+  `paperId` int(11) NOT NULL,
+  `reviewId` int(11) NOT NULL,
+  `contactId` int(11) NOT NULL,
+  `status` tinyint(1) NOT NULL DEFAULT 0,
+  `timeCreated` bigint(11) NOT NULL DEFAULT 0,
+  `timeModified` bigint(11) NOT NULL DEFAULT 0,
+  `tfields` longblob DEFAULT NULL,
+  `sfields` varbinary(2048) DEFAULT NULL,
+  `data` varbinary(8192) DEFAULT NULL,
+  PRIMARY KEY (`reviewQualityCheckId`),
+  KEY `paperId` (`paperId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `contactId` (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
+--
+-- Table structure for table `ReviewQualityComment`
+--
+
+DROP TABLE IF EXISTS `ReviewQualityComment`;
+CREATE TABLE `ReviewQualityComment` (
+  `reviewQualityCommentId` int(11) NOT NULL AUTO_INCREMENT,
+  `paperId` int(11) NOT NULL,
+  `reviewId` int(11) NOT NULL,
+  `reviewQualityCheckId` int(11) NOT NULL DEFAULT 0,
+  `contactId` int(11) NOT NULL,
+  `timeModified` bigint(11) NOT NULL,
+  `timeNotified` bigint(11) NOT NULL DEFAULT 0,
+  `comment` varbinary(32767) DEFAULT NULL,
+  `commentOverflow` longblob DEFAULT NULL,
+  `commentType` int(11) NOT NULL DEFAULT 0,
+  `replyTo` int(11) NOT NULL DEFAULT 0,
+  `ordinal` int(11) NOT NULL DEFAULT 0,
+  `commentTags` varbinary(1024) DEFAULT NULL,
+  `commentFormat` tinyint(1) DEFAULT NULL,
+  `commentData` varbinary(4096) DEFAULT NULL,
+  PRIMARY KEY (`reviewQualityCommentId`),
+  KEY `paperId` (`paperId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `reviewQualityCheckId` (`reviewQualityCheckId`),
+  KEY `contactId` (`contactId`),
+  KEY `timeModified` (`timeModified`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
 -- Initial settings
 -- (each setting must be on its own line for createdb.php/createdb.sh)
 insert into Settings (name, value, data) values
-  ('allowPaperOption', 299, null),   -- schema version
+  ('allowPaperOption', 300, null),   -- schema version
   ('setupPhase', 1, null),           -- initial user is chair
   ('no_papersub', 1, null),          -- no submissions yet
   ('sub_pcconf', 1, null),           -- collect PC conflicts, not collaborators

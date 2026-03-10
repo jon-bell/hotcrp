@@ -335,5 +335,11 @@
         "name": "searchcontrol",
         "parse_function": "PaperSearch::parse_searchcontrol",
         "priority": 100
-    }
+    },
+    {
+        "name": "rqc",
+        "parse_function": "ReviewQuality_SearchTerm::parse"
+    },
+    {   "name": "reviewquality", "alias": "rqc"   },
+    {   "name": "qualitycheck", "alias": "rqc"   }
 ]

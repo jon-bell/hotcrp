@@ -1192,5 +1192,30 @@
     {   "name": "pcrev_assigntime", "internal": true   },
     {   "name": "pcrev_informtime", "internal": true   },
     {   "name": "has_colontag", "internal": true   },
-    {   "name": "no_papersub", "internal": true   }
+    {   "name": "no_papersub", "internal": true   },
+
+    {
+        "name": "review_quality_enabled",
+        "title": "Enable review quality checks",
+        "type": "checkbox",
+        "parser_class": "ReviewQualityForm_SettingParser"
+    },
+    {
+        "name": "review_quality_viewer_tags",
+        "title": "Review quality viewer tags",
+        "type": "string",
+        "parser_class": "ReviewQualityForm_SettingParser"
+    },
+    {
+        "name": "review_quality_editor_tags",
+        "title": "Review quality editor tags",
+        "type": "string",
+        "parser_class": "ReviewQualityForm_SettingParser"
+    },
+    {
+        "name": "review_quality_form",
+        "title": "Review quality form",
+        "type": "string",
+        "parser_class": "ReviewQualityForm_SettingParser"
+    }
 ]

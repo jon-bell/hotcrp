@@ -269,5 +269,21 @@
         "name": "clearfollow", "parser_class": "Follow_AssignmentParser",
         "parameters": ["user"], "default_follow": "clear", "order": false,
         "description": "Default notifications for reviews and comments"
-    }
+    },
+    {
+        "name": "reviewqualitycheck", "parser_class": "ReviewQuality_AssignmentParser",
+        "remove": false,
+        "parameters": ["user", "?review_id"],
+        "description": "Assign review quality check"
+    },
+    {   "name": "rqc", "alias": "reviewqualitycheck"   },
+    {   "name": "qualitycheck", "alias": "reviewqualitycheck"   },
+    {
+        "name": "clearreviewqualitycheck", "parser_class": "ReviewQuality_AssignmentParser",
+        "remove": true,
+        "parameters": ["user", "?review_id"],
+        "group": "reviewqualitycheck",
+        "description": "Remove review quality check assignment"
+    },
+    {   "name": "clearrqc", "alias": "clearreviewqualitycheck"   }
 ]

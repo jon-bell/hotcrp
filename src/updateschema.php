@@ -3111,6 +3111,48 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
             assert(self::RF_AUSEEN_LIVE_v299 === ReviewInfo::RF_AUSEEN_LIVE);
             $conf->update_schema_version(299);
         }
+        if ($conf->sversion === 299
+            && $conf->ql_ok("create table `ReviewQualityCheck` (
+  `reviewQualityCheckId` int(11) NOT NULL AUTO_INCREMENT,
+  `paperId` int(11) NOT NULL,
+  `reviewId` int(11) NOT NULL,
+  `contactId` int(11) NOT NULL,
+  `status` tinyint(1) NOT NULL DEFAULT 0,
+  `timeCreated` bigint(11) NOT NULL DEFAULT 0,
+  `timeModified` bigint(11) NOT NULL DEFAULT 0,
+  `tfields` longblob DEFAULT NULL,
+  `sfields` varbinary(2048) DEFAULT NULL,
+  `data` varbinary(8192) DEFAULT NULL,
+  PRIMARY KEY (`reviewQualityCheckId`),
+  KEY `paperId` (`paperId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `contactId` (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+            && $conf->ql_ok("create table `ReviewQualityComment` (
+  `reviewQualityCommentId` int(11) NOT NULL AUTO_INCREMENT,
+  `paperId` int(11) NOT NULL,
+  `reviewId` int(11) NOT NULL,
+  `reviewQualityCheckId` int(11) NOT NULL DEFAULT 0,
+  `contactId` int(11) NOT NULL,
+  `timeModified` bigint(11) NOT NULL,
+  `timeNotified` bigint(11) NOT NULL DEFAULT 0,
+  `comment` varbinary(32767) DEFAULT NULL,
+  `commentOverflow` longblob DEFAULT NULL,
+  `commentType` int(11) NOT NULL DEFAULT 0,
+  `replyTo` int(11) NOT NULL DEFAULT 0,
+  `ordinal` int(11) NOT NULL DEFAULT 0,
+  `commentTags` varbinary(1024) DEFAULT NULL,
+  `commentFormat` tinyint(1) DEFAULT NULL,
+  `commentData` varbinary(4096) DEFAULT NULL,
+  PRIMARY KEY (`reviewQualityCommentId`),
+  KEY `paperId` (`paperId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `reviewQualityCheckId` (`reviewQualityCheckId`),
+  KEY `contactId` (`contactId`),
+  KEY `timeModified` (`timeModified`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")) {
+            $conf->update_schema_version(300);
+        }
 
         $conf->ql_ok("delete from Settings where name='__schema_lock'");
         Conf::$main = $old_conf_g;

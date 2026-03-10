@@ -3671,6 +3671,87 @@ class PaperInfo {
             return false;
         }
     }
+
+
+    // Review quality checks
+
+    /** @var ?list<ReviewQualityCheckInfo> */
+    private $_rqc_array;
+
+    /** @return list<ReviewQualityCheckInfo> */
+    function all_review_quality_checks() {
+        if ($this->_rqc_array === null) {
+            $this->_rqc_array = [];
+            $result = $this->conf->qe("select * from ReviewQualityCheck where paperId=? order by reviewQualityCheckId", $this->paperId);
+            while (($qc = ReviewQualityCheckInfo::fetch($result, $this, $this->conf))) {
+                $this->_rqc_array[] = $qc;
+            }
+            Dbl::free($result);
+        }
+        return $this->_rqc_array;
+    }
+
+    /** @param int $reviewId
+     * @return list<ReviewQualityCheckInfo> */
+    function review_quality_checks_for_review($reviewId) {
+        $checks = [];
+        foreach ($this->all_review_quality_checks() as $qc) {
+            if ($qc->reviewId === $reviewId) {
+                $checks[] = $qc;
+            }
+        }
+        return $checks;
+    }
+
+    /** @param int $qcId
+     * @return ?ReviewQualityCheckInfo */
+    function review_quality_check_by_id($qcId) {
+        foreach ($this->all_review_quality_checks() as $qc) {
+            if ($qc->reviewQualityCheckId === $qcId) {
+                return $qc;
+            }
+        }
+        return null;
+    }
+
+    /** @return list<ReviewQualityCheckInfo> */
+    function viewable_review_quality_checks(Contact $user) {
+        if (!$user->can_view_review_quality_checks($this)) {
+            return [];
+        }
+        return $this->all_review_quality_checks();
+    }
+
+    /** @param int $reviewId
+     * @return list<ReviewQualityCommentInfo> */
+    function review_quality_comments_for_review($reviewId) {
+        $comments = [];
+        $result = $this->conf->qe(
+            "select * from ReviewQualityComment where paperId=? and reviewId=? order by timeModified, reviewQualityCommentId",
+            $this->paperId, $reviewId
+        );
+        while (($rc = ReviewQualityCommentInfo::fetch($result, $this, $this->conf))) {
+            $comments[] = $rc;
+        }
+        Dbl::free($result);
+        return $comments;
+    }
+
+    /** @param int $reviewId
+     * @return list<ReviewQualityCommentInfo> */
+    function viewable_review_quality_comments(Contact $user, $reviewId) {
+        $comments = [];
+        foreach ($this->review_quality_comments_for_review($reviewId) as $rc) {
+            if ($user->can_view_review_quality_comment($this, $rc)) {
+                $comments[] = $rc;
+            }
+        }
+        return $comments;
+    }
+
+    function invalidate_review_quality_checks() {
+        $this->_rqc_array = null;
+    }
 }
 
 class PaperInfoLikelyContacts implements JsonSerializable {

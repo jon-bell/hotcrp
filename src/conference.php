@@ -1373,6 +1373,26 @@ class Conf {
     }
 
 
+    /** @return ?array */
+    function review_quality_form_json() {
+        $x = $this->settingTexts["review_quality_form"] ?? null;
+        if (is_string($x)) {
+            $x = json_decode($x);
+        }
+        return is_array($x) ? $x : null;
+    }
+
+    /** @return array */
+    function review_quality_form_fields() {
+        return $this->review_quality_form_json() ?? [];
+    }
+
+    /** @return bool */
+    function review_quality_enabled() {
+        return !!$this->setting("review_quality_enabled");
+    }
+
+
     /** @return TagMap */
     function tags() {
         if (!$this->_tag_map) {

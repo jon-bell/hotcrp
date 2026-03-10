@@ -27,6 +27,8 @@ class SiteLoader {
         "MessageItem" => "lib/messageset.php",
         "PaperInfoSet" => "src/paperinfo.php",
         "Present_ReviewFieldSearch" => "src/reviewfieldsearch.php",
+        "ReviewQualityCheckInfo" => "src/reviewqualitycheckinfo.php",
+        "ReviewQualityCommentInfo" => "src/reviewqualitycommentinfo.php",
         "QrequestFile" => "lib/qrequest.php",
         "ReviewFieldInfo" => "src/reviewfield.php",
         "StreamS3Result" => "lib/s3result.php",
