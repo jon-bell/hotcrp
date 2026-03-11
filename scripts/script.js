@@ -15469,15 +15469,107 @@ Object.assign(window.hotcrp, {
     // wstorage
 });
 
+hotcrp.add_review_quality_check = function (qc) {
+    var revcard = document.querySelector('.revcard[data-rid="' + qc.rid + '"]');
+    if (!revcard) return;
+
+    var bodyId = revcard.id + "-body";
+    var body = document.getElementById(bodyId);
+    if (!body) {
+        body = revcard.querySelector("div");
+    }
+    if (!body) return;
+
+    var statusCls = "rqc-pending";
+    if (qc.status === 1) statusCls = "rqc-needswork";
+    else if (qc.status === 2) statusCls = "rqc-improved";
+
+    var card = $e("div", "rqc-inset " + statusCls);
+    card.id = "qualitycheck-" + qc.checkId;
+
+    var hdr = $e("div", "rqc-inset-header");
+    var icon = $e("span", "rqc-inset-icon", "\u2691");
+    var title = $e("span", "rqc-inset-title", "Quality Check");
+    var badge = $e("span", "rqc-inset-badge " + statusCls, qc.status_name);
+    var meta = $e("span", "rqc-inset-meta", "by " + qc.checker + " \u00b7 " + qc.time);
+    hdr.append(icon, " ", title, " ", badge, " ", meta);
+    card.appendChild(hdr);
+
+    if (qc.fields && qc.fields.length > 0) {
+        var fields = $e("div", "rqc-inset-fields");
+        for (var i = 0; i < qc.fields.length; ++i) {
+            var f = qc.fields[i];
+            var fd = $e("div", "rqc-inset-field");
+            var lbl = $e("span", "rqc-inset-field-label", f.name + ": ");
+            fd.appendChild(lbl);
+            if (f.is_text) {
+                var tv = $e("div", "rqc-inset-field-text");
+                tv.textContent = f.value;
+                fd.appendChild(tv);
+            } else {
+                fd.appendChild(document.createTextNode(String(f.value)));
+            }
+            fields.appendChild(fd);
+        }
+        card.appendChild(fields);
+    }
+
+    if (qc.comments && qc.comments.length > 0) {
+        var thread = $e("div", "rqc-inset-thread");
+        var threadTitle = $e("div", "rqc-inset-thread-title", "Discussion");
+        thread.appendChild(threadTitle);
+        for (var j = 0; j < qc.comments.length; ++j) {
+            var c = qc.comments[j];
+            var ce = $e("div", "rqc-inset-comment");
+            var chdr = $e("div", "rqc-inset-comment-hdr");
+            var cauthor = $e("strong", null, c.author);
+            chdr.appendChild(cauthor);
+            if (c.role) {
+                chdr.appendChild(document.createTextNode(" "));
+                chdr.appendChild($e("span", "rqc-inset-role", "(" + c.role + ")"));
+            }
+            chdr.appendChild(document.createTextNode(" \u00b7 " + c.time));
+            ce.appendChild(chdr);
+            var cbody = $e("div", "rqc-inset-comment-text");
+            cbody.textContent = c.text;
+            ce.appendChild(cbody);
+            thread.appendChild(ce);
+        }
+        card.appendChild(thread);
+    }
+
+    if (qc.can_comment || qc.can_resolve) {
+        var actions = $e("div", "rqc-inset-actions");
+        if (qc.can_comment) {
+            var ta = $e("textarea", "rqc-inset-textarea w-text need-autogrow");
+            ta.name = "rqc_comment_" + qc.checkId;
+            ta.rows = 2;
+            ta.placeholder = "Reply to quality check\u2026";
+            actions.appendChild(ta);
+            var btnRow = $e("div", "rqc-inset-btnrow");
+            var btn = $e("button", "btn btn-primary ui js-rqc-post-comment");
+            btn.setAttribute("data-check-id", qc.checkId);
+            btn.setAttribute("data-pid", qc.pid);
+            btn.textContent = "Reply";
+            btnRow.appendChild(btn);
+            if (qc.can_resolve) {
+                var rbtn = $e("button", "btn btn-success ui js-rqc-resolve");
+                rbtn.setAttribute("data-check-id", qc.checkId);
+                rbtn.setAttribute("data-pid", qc.pid);
+                rbtn.textContent = "Mark improved";
+                btnRow.appendChild(rbtn);
+            }
+            actions.appendChild(btnRow);
+        }
+        card.appendChild(actions);
+    }
+
+    body.appendChild(card);
+};
+
 handle_ui.on("js-rqc-resolve", function () {
     var checkId = this.getAttribute("data-check-id");
-    var paperId = document.querySelector("input[name=p]");
-    if (!paperId) {
-        paperId = document.querySelector("[data-pid]");
-        paperId = paperId ? paperId.getAttribute("data-pid") : null;
-    } else {
-        paperId = paperId.value;
-    }
+    var paperId = this.getAttribute("data-pid");
     if (!checkId || !paperId) return;
     $.post(hoturl("api/qualitycheck", {p: paperId}), {
         action: "resolve",
@@ -15489,18 +15581,19 @@ handle_ui.on("js-rqc-resolve", function () {
     });
 });
 
-handle_ui.on("js-rqc-comment-submit", function (evt) {
-    evt.preventDefault();
-    var form = this.closest("form");
-    if (!form) return;
-    $.ajax({
-        url: form.action,
-        type: "POST",
-        data: $(form).serialize(),
-        success: function (data) {
-            if (data.ok) {
-                location.reload();
-            }
+handle_ui.on("js-rqc-post-comment", function () {
+    var checkId = this.getAttribute("data-check-id");
+    var paperId = this.getAttribute("data-pid");
+    var card = this.closest(".rqc-inset");
+    var ta = card ? card.querySelector("textarea") : null;
+    if (!checkId || !paperId || !ta || !ta.value.trim()) return;
+    $.post(hoturl("api/qualitycheck", {p: paperId}), {
+        action: "comment",
+        check_id: checkId,
+        text: ta.value.trim()
+    }, function (data) {
+        if (data.ok) {
+            location.reload();
         }
     });
 });

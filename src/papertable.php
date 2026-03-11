@@ -2983,8 +2983,115 @@ class PaperTable {
 
         if (!$this->_review_overview_card(true, '<p class="sd">There are no reviews or comments for you to view.</p>', $m)) {
             $this->print_rc($this->viewable_rrows, $this->include_comments());
+            $this->print_review_quality_checks();
         }
-        QualityCheck_Page::print_paper_quality_checks($this->prow, $this->user);
+    }
+
+    private function print_review_quality_checks() {
+        if (!$this->conf->setting("review_quality_check_active")) {
+            return;
+        }
+        $checks = ReviewQualityCheckInfo::fetch_by_paper($this->conf, $this->prow->paperId);
+        if (empty($checks)) {
+            return;
+        }
+
+        $qcform = $this->conf->review_quality_form();
+        $by_review = [];
+        foreach ($checks as $rqc) {
+            if ($this->user->can_view_quality_check($this->prow, $rqc)) {
+                $by_review[$rqc->reviewId][] = $rqc;
+            }
+        }
+        if (empty($by_review)) {
+            return;
+        }
+
+        $s = "";
+        foreach ($by_review as $reviewId => $rqcs) {
+            foreach ($rqcs as $rqc) {
+                $comments = ReviewQualityCommentInfo::fetch_by_check($this->conf, $rqc->checkId);
+                $jdata = $this->_quality_check_json($rqc, $comments, $qcform);
+                $s .= "hotcrp.add_review_quality_check(" . json_encode_browser($jdata) . ");\n";
+            }
+        }
+        if ($s !== "") {
+            echo Ht::unstash_script($s);
+        }
+    }
+
+    /** @return object */
+    private function _quality_check_json(ReviewQualityCheckInfo $rqc, $comments, ReviewQualityForm $qcform) {
+        $checker = $this->conf->user_by_id($rqc->contactId);
+        $checker_name = $checker ? $this->user->name_text_for($checker) : "Unknown";
+
+        $fields = [];
+        foreach ($qcform->all_fields() as $f) {
+            $fval = $rqc->fval($f->short_id);
+            if ($fval === null || $fval === 0 || $fval === "") {
+                continue;
+            }
+            $display_val = $fval;
+            if ($f->is_sfield && ($f instanceof DiscreteValues_ReviewField)) {
+                $display_val = $f->unparse_value((int) $fval) ?? (string) $fval;
+            }
+            $fields[] = (object) [
+                "name" => $f->name,
+                "value" => $display_val,
+                "is_text" => !$f->is_sfield
+            ];
+        }
+
+        $cmt_list = [];
+        foreach ($comments as $cmt) {
+            $commenter = $this->conf->user_by_id($cmt->contactId);
+            $commenter_name = $commenter ? $this->user->name_text_for($commenter) : "Unknown";
+
+            $is_checker = $cmt->contactId === $rqc->contactId;
+            $role = $is_checker ? "Meta-reviewer" : "";
+            if (!$is_checker) {
+                foreach ($this->prow->reviews_as_display() as $rrow) {
+                    if ($rrow->reviewId === $rqc->reviewId && $rrow->contactId === $cmt->contactId) {
+                        $role = "Reviewer";
+                        break;
+                    }
+                }
+            }
+            $cmt_list[] = (object) [
+                "id" => $cmt->rqCommentId,
+                "author" => $commenter_name,
+                "role" => $role,
+                "time" => $this->conf->unparse_time($cmt->timeModified),
+                "text" => $cmt->content()
+            ];
+        }
+
+        $can_comment = $this->user->privChair
+            || $rqc->contactId === $this->user->contactId;
+        if (!$can_comment) {
+            foreach ($this->prow->reviews_as_display() as $rrow) {
+                if ($rrow->reviewId === $rqc->reviewId && $rrow->contactId === $this->user->contactId) {
+                    $can_comment = true;
+                    break;
+                }
+            }
+        }
+        $can_resolve = $rqc->is_needs_work()
+            && ($this->user->privChair || $rqc->contactId === $this->user->contactId);
+
+        return (object) [
+            "pid" => $rqc->paperId,
+            "rid" => $rqc->reviewId,
+            "checkId" => $rqc->checkId,
+            "status" => $rqc->status,
+            "status_name" => $rqc->status_name(),
+            "checker" => $checker_name,
+            "time" => $this->conf->unparse_time($rqc->timeModified),
+            "fields" => $fields,
+            "comments" => $cmt_list,
+            "can_comment" => $can_comment,
+            "can_resolve" => $can_resolve
+        ];
     }
 
     /** @param int $respround
