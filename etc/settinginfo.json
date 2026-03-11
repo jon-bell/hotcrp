@@ -1424,5 +1424,23 @@
     {   "name": "pcrev_informtime", "internal": true   },
     {   "name": "has_colontag", "internal": true   },
     {   "name": "no_papersub", "internal": true   },
-    {   "name": "cmt_author", "internal": true, "default_value": 0   }
+    {   "name": "cmt_author", "internal": true, "default_value": 0   },
+
+    {
+        "name": "review_quality_check_active",
+        "title": "Review quality checks active",
+        "type": "checkbox",
+        "parser_class": "QualityCheck_SettingParser",
+        "tags": "qualitycheck"
+    },
+    {
+        "name": "review_quality_form", "internal": true, "type": "string"
+    },
+    {
+        "name": "review_quality_form_json",
+        "title": "Quality check form (JSON)",
+        "type": "string",
+        "parser_class": "QualityCheckForm_SettingParser",
+        "tags": "qualitycheck"
+    }
 ]

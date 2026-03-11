@@ -156,6 +156,8 @@ class Conf {
     private $_site_contact;
     /** @var ?ReviewForm */
     private $_review_form;
+    /** @var ?ReviewQualityForm */
+    private $_review_quality_form;
     /** @var ?AbbreviationMatcher<PaperOption|ReviewField|NamedFormula> */
     private $_abbrev_matcher;
     /** @var bool */
@@ -1455,6 +1457,23 @@ class Conf {
             $this->_review_form = new ReviewForm($this, $this->review_form_json());
         }
         return $this->_review_form;
+    }
+
+    /** @return null|array|object */
+    function review_quality_form_json() {
+        $x = $this->settingTexts["review_quality_form"] ?? null;
+        if (is_string($x)) {
+            $x = json_decode($x);
+        }
+        return is_array($x) || is_object($x) ? $x : null;
+    }
+
+    /** @return ReviewQualityForm */
+    function review_quality_form() {
+        if ($this->_review_quality_form === null) {
+            $this->_review_quality_form = new ReviewQualityForm($this, $this->review_quality_form_json());
+        }
+        return $this->_review_quality_form;
     }
 
     /** @return array<string,ReviewField> */

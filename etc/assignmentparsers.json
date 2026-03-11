@@ -279,5 +279,11 @@
         "name": "unshare", "parser_class": "Sharing_AssignmentParser",
         "default_share": "no",
         "description": "Disable author’s share link"
-    }
+    },
+    {
+        "name": "qualitycheck", "parser_class": "QualityCheck_AssignmentParser",
+        "parameters": ["!user:user"],
+        "description": "Assign review quality checks"
+    },
+    {   "name": "qcheck", "alias": "qualitycheck"   }
 ]

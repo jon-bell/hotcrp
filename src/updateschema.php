@@ -3271,6 +3271,49 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
             && $conf->ql_ok("delete from DeletedContactInfo where (select email from ContactInfo where contactId=DeletedContactInfo.contactId and (cflags&8)!=0)=DeletedContactInfo.email")) {
             $conf->update_schema_version(322);
         }
+        if ($conf->sversion === 322
+            && $conf->ql_ok("CREATE TABLE IF NOT EXISTS `ReviewQualityCheck` (
+  `paperId` int NOT NULL,
+  `reviewId` int NOT NULL,
+  `checkId` int NOT NULL AUTO_INCREMENT,
+  `contactId` int NOT NULL,
+  `status` tinyint NOT NULL DEFAULT 0,
+  `timeCreated` bigint NOT NULL DEFAULT 0,
+  `timeModified` bigint NOT NULL DEFAULT 0,
+  `timeResolved` bigint DEFAULT NULL,
+  `s01` smallint NOT NULL DEFAULT 0,
+  `s02` smallint NOT NULL DEFAULT 0,
+  `s03` smallint NOT NULL DEFAULT 0,
+  `s04` smallint NOT NULL DEFAULT 0,
+  `s05` smallint NOT NULL DEFAULT 0,
+  `s06` smallint NOT NULL DEFAULT 0,
+  `tfields` longblob DEFAULT NULL,
+  `sfields` varbinary(2048) DEFAULT NULL,
+  PRIMARY KEY (`paperId`,`checkId`),
+  UNIQUE KEY `checkId` (`checkId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `contactId` (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+            && $conf->ql_ok("CREATE TABLE IF NOT EXISTS `ReviewQualityComment` (
+  `paperId` int NOT NULL,
+  `reviewId` int NOT NULL,
+  `checkId` int NOT NULL,
+  `rqCommentId` int NOT NULL AUTO_INCREMENT,
+  `contactId` int NOT NULL,
+  `timeModified` bigint NOT NULL,
+  `comment` varbinary(32767) DEFAULT NULL,
+  `commentType` int NOT NULL DEFAULT 0,
+  `replyTo` int NOT NULL DEFAULT 0,
+  `ordinal` int NOT NULL DEFAULT 0,
+  `commentOverflow` longblob DEFAULT NULL,
+  PRIMARY KEY (`checkId`,`rqCommentId`),
+  UNIQUE KEY `rqCommentId` (`rqCommentId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `paperId` (`paperId`),
+  KEY `contactId` (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")) {
+            $conf->update_schema_version(323);
+        }
 
         $conf->ql_ok("delete from Settings where name='__schema_lock'");
         Conf::$main = $old_conf_g;

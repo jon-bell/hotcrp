@@ -15468,3 +15468,39 @@ Object.assign(window.hotcrp, {
     usere: usere
     // wstorage
 });
+
+handle_ui.on("js-rqc-resolve", function () {
+    var checkId = this.getAttribute("data-check-id");
+    var paperId = document.querySelector("input[name=p]");
+    if (!paperId) {
+        paperId = document.querySelector("[data-pid]");
+        paperId = paperId ? paperId.getAttribute("data-pid") : null;
+    } else {
+        paperId = paperId.value;
+    }
+    if (!checkId || !paperId) return;
+    $.post(hoturl("api/qualitycheck", {p: paperId}), {
+        action: "resolve",
+        check_id: checkId
+    }, function (data) {
+        if (data.ok) {
+            location.reload();
+        }
+    });
+});
+
+handle_ui.on("js-rqc-comment-submit", function (evt) {
+    evt.preventDefault();
+    var form = this.closest("form");
+    if (!form) return;
+    $.ajax({
+        url: form.action,
+        type: "POST",
+        data: $(form).serialize(),
+        success: function (data) {
+            if (data.ok) {
+                location.reload();
+            }
+        }
+    });
+});

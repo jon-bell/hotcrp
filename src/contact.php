@@ -4679,6 +4679,45 @@ class Contact implements JsonSerializable {
         return $whyNot;
     }
 
+    /** @param PaperInfo $prow
+     * @param ?ReviewQualityCheckInfo $rqc
+     * @return bool */
+    function can_view_quality_check(PaperInfo $prow, $rqc = null) {
+        if ($this->privChair) {
+            return true;
+        }
+        if ($rqc && $rqc->contactId === $this->contactId) {
+            return true;
+        }
+        $rights = $this->rights($prow);
+        if ($rights->reviewType === REVIEW_META) {
+            return true;
+        }
+        if ($rqc) {
+            foreach ($prow->reviews_as_display() as $rrow) {
+                if ($rrow->reviewId === $rqc->reviewId
+                    && $rrow->contactId === $this->contactId) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** @param PaperInfo $prow
+     * @param ?ReviewQualityCheckInfo $rqc
+     * @return bool */
+    function can_edit_quality_check(PaperInfo $prow, $rqc = null) {
+        if ($this->privChair) {
+            return true;
+        }
+        if ($rqc && $rqc->contactId === $this->contactId) {
+            return true;
+        }
+        $rights = $this->rights($prow);
+        return $rights->reviewType === REVIEW_META;
+    }
+
     /** @param null|ReviewInfo|ReviewRequestInfo|ReviewRefusalInfo $rbase
      * @param PaperContactInfo $rights
      * @return bool */

@@ -267,6 +267,12 @@
         "name": "cmtafter", "parse_function": "CmtAfter_SearchTerm::parse"
     },
     {
+        "name": "qualitycheck",
+        "parse_function": "QualityCheck_SearchTerm::parse", "has": "any"
+    },
+    {   "name": "qcheck", "alias": "qualitycheck"   },
+    {   "name": "qc", "alias": "qualitycheck"   },
+    {
         "match": "[-_.a-zA-Z0-9\\s\\x80-\\xFF]+", "priority": -1,
         "expand_function": "Review_SearchTerm::review_field_factory"
     },

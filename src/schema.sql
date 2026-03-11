@@ -656,10 +656,69 @@ CREATE TABLE `TopicInterest` (
 
 
 
+--
+-- Table structure for table `ReviewQualityCheck`
+--
+
+DROP TABLE IF EXISTS `ReviewQualityCheck`;
+CREATE TABLE `ReviewQualityCheck` (
+  `paperId` int NOT NULL,
+  `reviewId` int NOT NULL,
+  `checkId` int NOT NULL AUTO_INCREMENT,
+  `contactId` int NOT NULL,
+  `status` tinyint NOT NULL DEFAULT 0,
+  `timeCreated` bigint NOT NULL DEFAULT 0,
+  `timeModified` bigint NOT NULL DEFAULT 0,
+  `timeResolved` bigint DEFAULT NULL,
+
+  `s01` smallint NOT NULL DEFAULT 0,
+  `s02` smallint NOT NULL DEFAULT 0,
+  `s03` smallint NOT NULL DEFAULT 0,
+  `s04` smallint NOT NULL DEFAULT 0,
+  `s05` smallint NOT NULL DEFAULT 0,
+  `s06` smallint NOT NULL DEFAULT 0,
+
+  `tfields` longblob DEFAULT NULL,
+  `sfields` varbinary(2048) DEFAULT NULL,
+
+  PRIMARY KEY (`paperId`,`checkId`),
+  UNIQUE KEY `checkId` (`checkId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `contactId` (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
+--
+-- Table structure for table `ReviewQualityComment`
+--
+
+DROP TABLE IF EXISTS `ReviewQualityComment`;
+CREATE TABLE `ReviewQualityComment` (
+  `paperId` int NOT NULL,
+  `reviewId` int NOT NULL,
+  `checkId` int NOT NULL,
+  `rqCommentId` int NOT NULL AUTO_INCREMENT,
+  `contactId` int NOT NULL,
+  `timeModified` bigint NOT NULL,
+  `comment` varbinary(32767) DEFAULT NULL,
+  `commentType` int NOT NULL DEFAULT 0,
+  `replyTo` int NOT NULL DEFAULT 0,
+  `ordinal` int NOT NULL DEFAULT 0,
+  `commentOverflow` longblob DEFAULT NULL,
+  PRIMARY KEY (`checkId`,`rqCommentId`),
+  UNIQUE KEY `rqCommentId` (`rqCommentId`),
+  KEY `reviewId` (`reviewId`),
+  KEY `paperId` (`paperId`),
+  KEY `contactId` (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
 -- Initial settings
 -- (each setting must be on its own line for createdb.php/createdb.sh)
 insert into Settings (name, value, data) values
-  ('allowPaperOption', 322, null),   -- schema version
+  ('allowPaperOption', 323, null),   -- schema version
   ('setupPhase', 1, null),           -- initial user is chair
   ('no_papersub', 1, null),          -- no submissions yet
   ('sub_pcconf', 1, null),           -- collect PC conflicts, not collaborators

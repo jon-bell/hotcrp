@@ -303,5 +303,11 @@
         "name": "commenters", "title": "Commenters",
         "prefer_row": true, "function": "+Commenters_PaperColumn",
         "order": 2000
-    }
+    },
+    {
+        "name": "qualitycheck", "title": "Quality checks",
+        "prefer_row": true, "function": "+QualityCheck_PaperColumn",
+        "order": 2100
+    },
+    {   "name": "qcheck", "alias": "qualitycheck"   }
 ]

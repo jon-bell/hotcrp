@@ -483,6 +483,29 @@
     },
 
     {
+        "name": "qualitycheck", "order": 650, "title": "Quality checks",
+        "description": "<0>Review quality check settings."
+    },
+    {   "name": "qc", "alias": "qualitycheck"   },
+    {
+        "name": "qualitycheck/main", "order": 10,
+        "print_function": "QualityCheck_SettingParser::print_main",
+        "settings": ["review_quality_check_active"]
+    },
+    {
+        "name": "qualitycheck/form", "order": 20,
+        "title": "Quality check form",
+        "print_function": "QualityCheck_SettingParser::print_form",
+        "settings": ["review_quality_form_json"]
+    },
+    {
+        "name": "qualitycheck/acl", "order": 30,
+        "title": "Visibility",
+        "print_function": "QualityCheck_SettingParser::print_acl"
+    },
+
+
+    {
         "name": "json", "order": 2000,
         "short_title": "Advanced", "title": "JSON site configuration",
         "description": "<0>Full site configuration in JSON.",

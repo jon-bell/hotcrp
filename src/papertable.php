@@ -2984,6 +2984,7 @@ class PaperTable {
         if (!$this->_review_overview_card(true, '<p class="sd">There are no reviews or comments for you to view.</p>', $m)) {
             $this->print_rc($this->viewable_rrows, $this->include_comments());
         }
+        QualityCheck_Page::print_paper_quality_checks($this->prow, $this->user);
     }
 
     /** @param int $respround
